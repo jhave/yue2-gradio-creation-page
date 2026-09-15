@@ -1,0 +1,32 @@
+{
+  "slug": "bright-black-light",
+  "title": "bright black light",
+  "audio": "audio/bright-black-light.mp3",
+  "rating": 4,
+  "preset": "",
+  "created": "2026-09-13T13:34:35",
+  "duration": "3m 45s",
+  "key_bpm": "Dm · ? BPM",
+  "style": "Root-emograss trap reframed as slow fourth-world psychopastoral chamber: fractured 5/4 and 7/8 pulses beneath dusty Lo-Fi synths, bowed banjo detuned into glass marimba, shoegaze-ASMR vocal fry kept close and breathy, dense shifting jazz harmonies, granular bass, abrupt math-break refrains non-repeating through evolving lines, quirky prepared percussion and muted ensemble textures opening into a virtuoso choral-string outro; intimate stereo saturation, restrained dynamics, wide but muddy, tenderly disorienting.",
+  "lyrics": "lifting red\n\t in the back room \n\n\t a bright black light \n\t  left \n\t the sun\n\n\n\n                                                                                                                      \n\n 0.55 \n\n\n\n\tHoney-Whispers \n\n Then on the threshold of an old green tree \n     blood bloomed\n\n\n\n                                                                                                                      \n\n 0.65 \n\n \n \n  I am \n the old man \n who \n is a little bird \n\n\n\n\n                                                                                                                      \n\n 0.75 \n\n\n\t \n\t When time first went to meet water, \n\t Wind blew clear into the mountain, \n\t Sun was shining on the grass \n\t  in a purple sky.\n\t \n\n\n                                                                                                                      \n\n 0.85 \n\n\n\n\t \n\t This night of all nights I arise \n\t     blue \n\t  in a golden factory \n\t  on the other side of mind \n\n\n\n                                                                                                                      \n\n 0.95 \n\n\n\n  Omnipotens Pendulum. \n\n\t  I cannot remember \n\t     why you came.\n\n\t True words have come not \n\t  To remedy the refined\n\n\n\n                                                                                                                      \n\n 1.05 \n\n\n\n\tRuined Cylinder \n\n It is not love which happiness shackles. \n Plodding over it. Fitting pain to overtake fear.\n\n    No Great Yes \n\n  over her pasture moves, \n   to feel you, wearing \n  fragments of what she once saw.",
+  "notes": "",
+  "parameters": {
+    "score_temp": 0.7,
+    "score_top_p": 0.9,
+    "score_rep_pen": 1.005,
+    "score_top_k": 30,
+    "score_pen_win": 100,
+    "sem_temp": 1.6,
+    "sem_top_p": 0.95,
+    "rep_pen": 1.4,
+    "sem_top_k": 100,
+    "sem_pen_win": 50,
+    "sem_min_tokens": 200,
+    "sem_max_tokens": 9000,
+    "flow_steps": 16,
+    "cfg_scale": 1.3,
+    "seed": 777,
+    "cot_mode": "full"
+  },
+  "source_folder": "Root-emograss_trap_reframed_1789305486"
+}

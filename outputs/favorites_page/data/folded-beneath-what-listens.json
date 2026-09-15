@@ -1,0 +1,32 @@
+{
+  "slug": "folded-beneath-what-listens",
+  "title": "folded beneath what listens",
+  "audio": "audio/folded-beneath-what-listens.mp3",
+  "rating": 4,
+  "preset": "",
+  "created": "2026-09-13T12:47:54",
+  "duration": "2m 01s",
+  "key_bpm": "Cm · ? BPM",
+  "style": "English, progressive hybrid alt-indie lo-fi with drastic section transitions: begins with fragile spectral ambient choral drone breathing and cello, builds into gentle math post-rock clean indie guitars, erupts into heavy lofi trap beat drop with gushing 808 sub-bass and rolling ricochet hi-hats, suddenly subsides into soft fragile tape-decay ambient breakdown, then crescendos into an subtle full post-rock oceanic shimmer bedroom psychedelia wall  of soaring tremolo guitars , neo-soul vocales and trap drums, dynamic whispered to soaring duet vocals, 134 BPM",
+  "lyrics": "I imagine my name \n\t whispering in your veins.\n\n\n\n                                                                                                                      \n\n 1.0 \n\n\n\n\tWe desired \n\t to carry time.\n\n\n\n\n Folded beneath what listens\n Folded beneath what glistens\n\n\n The deep summer is always\n  hurling esoteric discounts, eminent carapaces,\n   low-brow zephyrs, \n   suspicious (bioaquadooloop) tinsel,  \n    demur appellants, immobilized \n  veiling\n\niridescent scaling",
+  "notes": "",
+  "parameters": {
+    "score_temp": 0.7,
+    "score_top_p": 0.9,
+    "score_rep_pen": 1.005,
+    "score_top_k": 30,
+    "score_pen_win": 100,
+    "sem_temp": 1.15,
+    "sem_top_p": 0.95,
+    "rep_pen": 1.24,
+    "sem_top_k": 100,
+    "sem_pen_win": 50,
+    "sem_min_tokens": 200,
+    "sem_max_tokens": 9000,
+    "flow_steps": 16,
+    "cfg_scale": 1.0,
+    "seed": 444,
+    "cot_mode": "full"
+  },
+  "source_folder": "progressive_cyber_hopkins_1789303384"
+}

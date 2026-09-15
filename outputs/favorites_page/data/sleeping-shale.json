@@ -1,0 +1,32 @@
+{
+  "slug": "sleeping-shale",
+  "title": "sleeping shale",
+  "audio": "audio/sleeping-shale.mp3",
+  "rating": 4,
+  "preset": "",
+  "created": "2026-09-13T18:40:03",
+  "duration": "1m 38s",
+  "key_bpm": "D#m · 95 BPM",
+  "style": "English-Algerian fourth world, lo-fi indie post-math art-rock, fuzzy shoegaze guitars, neo-baroque minimalist horn and string quartet, dnb bass, trap subs, deadpan vocal fry, imperfect close-mic slacker delivery, angular clean chime riffs, hazy tape saturation, cassette hiss, dynamic swells, unpolished, 98 BPM",
+  "lyrics": "fingers\ntracing\nriverbed clay,\nsleeping shale\n\nskin\nbreathing\nof damp topsoil,\nheavy root\n\n[chorus]\nrelease release release\nand retain it\nregain it\nit is it is it is it\n\n[verse]\npulse\nwhispering\nfractured stone,\nquiet bedrock\n\nbreath\nrising\nsummer forest,\ndampening pine\n\n[chorus]\nrelease release release\nand retain it\nregain it\nit is it is it is it",
+  "notes": "",
+  "parameters": {
+    "score_temp": 0.7,
+    "score_top_p": 0.9,
+    "score_rep_pen": 1.005,
+    "score_top_k": 30,
+    "score_pen_win": 100,
+    "sem_temp": 1.25,
+    "sem_top_p": 0.95,
+    "rep_pen": 1.25,
+    "sem_top_k": 100,
+    "sem_pen_win": 50,
+    "sem_min_tokens": 200,
+    "sem_max_tokens": 9000,
+    "flow_steps": 16,
+    "cfg_scale": 1.2,
+    "seed": 888,
+    "cot_mode": "full"
+  },
+  "source_folder": "quirky_math_shoegaze - fourth world, lo-fi [voc_wild:1.25, explore:0.9, sem:0.95, score:0.92, repeat:1.25, seed:888, cfg:1.2, steps:16]_203450"
+}

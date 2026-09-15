@@ -1,0 +1,32 @@
+{
+  "slug": "maxxamogga",
+  "title": "maxxamogga",
+  "audio": "audio/maxxamogga.mp3",
+  "rating": 4,
+  "preset": "eco fourth world, lo-fi - more explore",
+  "created": "2026-09-14T05:07:56",
+  "duration": "4m 26s",
+  "key_bpm": "F#m · 100 BPM",
+  "style": "English-Algerian fourth world, lo-fi indie post-math art-rock, fuzzy shoegaze guitars, neo-baroque minimalist horn and string quartet, dnb bass, trap subs, deadpan vocal fry, imperfect close-mic slacker delivery, angular clean chime riffs, hazy tape saturation, cassette hiss, dynamic swells, unpolished, 98 BPM",
+  "lyrics": "[Intro — Spoken close-mic, tape hiss, zero percussion]\nchat.\nchat is this.\nchat is this.\nchat—\n(theme stated, flat, unhurried)\nMaxx. Maxxa. Maxxamogg.\nKore koor korr.\nSlop.\n\n[Theme A — Rhythmic whisper, dry, metronomic]\nMaxx maxx maxxamogg\nmewwa mewwa mogg\nMaxxamogga-rizz\nrizz razz rozz ruzz\nRizzruzz. Korr.\nsiks sevn\nsiks sevn\nsiks—\n\n[Theme B — Half-sung, vowel ladder, one voice doubled]\nDelulu\ndalula\ndolulo\ndee\nAura auro aurr\naurr-minus\naurr\nEnpisi. Enpisi.\nen-pee\nen\n—\n\n[Bridge — Whispered consonant field, no pitch]\nklanka klinka klonk\nklonk-koded\nbrenrot branrot brinrot\nbrin—\nyap yap yappa\nyappa-glaz\nglaz glaz\nglazza-korr\nchopt chapt chupt\nmid.\nmid.\nmidmidmid.\n\n[Chorus — Full voice, choral stack, heavy low end]\nIFIKASHUN\nifik-ifik-ASHUN\nifika-maxxa-SHUN\nrizz-ifika-SHUN\nslop-ifika-SHUN\nSLOP\nSLOP\nslop-a slup\nSLOP\n(counter-voice, lower)\nsiks sevn siks sevn siks sevn siks—\n\n[Development — Themes interlock, accelerando]\nMaxxamogga-delulu\ndelulu-korr-koded\nkorr-koded-enpisi\nenpisi-brinrot-yap\nyappa-glazza-rizzruzz\nrizzruzz-slop-ifika—\ngyat gyet gyot\ngyot-mid\nmid-maxx\nmaxx-aurr\naurr-SLOP\n\n[Chorus — Recapitulation, maximal, duet]\nIFIKASHUN\nifik-ifik-ASHUN\nslop-ifika-SHUN\nklonk-ifika-SHUN\nSLOP SLOP slop-a slup\nchat.\nchat is this.\nchat is this real.\nchat—\n\n[Outro — Subtract to single voice, tape decay]\nmaxx\nkorr\nslop\nsiks\nsevn\nchat\n—",
+  "notes": "",
+  "parameters": {
+    "score_temp": 0.7,
+    "score_top_p": 0.9,
+    "score_rep_pen": 1.005,
+    "score_top_k": 30,
+    "score_pen_win": 100,
+    "sem_temp": 1.33,
+    "sem_top_p": 0.95,
+    "rep_pen": 1.32,
+    "sem_top_k": 100,
+    "sem_pen_win": 50,
+    "sem_min_tokens": 200,
+    "sem_max_tokens": 9000,
+    "flow_steps": 16,
+    "cfg_scale": 1.0,
+    "seed": 762,
+    "cot_mode": "full"
+  },
+  "source_folder": "2026-09-14_064823_eco_fourth_world_lo_fi_more_explore"
+}

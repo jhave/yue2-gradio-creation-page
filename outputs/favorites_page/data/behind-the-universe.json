@@ -1,0 +1,32 @@
+{
+  "slug": "behind-the-universe",
+  "title": "behind the universe",
+  "audio": "audio/behind-the-universe.mp3",
+  "rating": 4,
+  "preset": "experimental techno, progressive hybrid",
+  "created": "2026-09-14T06:09:44",
+  "duration": "2m 31s",
+  "key_bpm": "E · 65 BPM",
+  "style": "English-Algerian-Chinese, experimental techno, progressive hybrid  epic with drastic section transitions: begins with fragile spectral ambient choral drone, builds into angular math rock clean indie guitars, erupts into heavy lofi trap beat drop with gushing 808 sub-bass and rolling ricochet hi-hats, suddenly subsides into soft fragile tape-decay ambient breakdown, then crescendos into an explosive post-rock oceanic shimmer wall with soaring tremolo guitars and massive drums, dynamic whispered to soaring duet vocals, 134 BPM",
+  "lyrics": "~ + ~\n                                                                                                                       \n\n\n\n\n\tin the murmur \n\t we conceived \n\t \n\t       behind\n\t the universe\n\n\t\t\t\t a wind \n\t\t\t\t coming\n\t\t\t\t to sooth all\n\n\n\n\n\n\t\t~ + ~\n                                                                                                                       \n\n\n\n\n\n\n\n\n\n\nI sat down to palpitate the wind \n      where the sun paints fires \n              on young abundance\n\nI was listening to ice \n     sweating, dancing alone",
+  "notes": "",
+  "parameters": {
+    "score_temp": 1.05,
+    "score_top_p": 0.96,
+    "score_rep_pen": 1.11,
+    "score_top_k": 55,
+    "score_pen_win": 100,
+    "sem_temp": 1.15,
+    "sem_top_p": 0.96,
+    "rep_pen": 1.22,
+    "sem_top_k": 100,
+    "sem_pen_win": 50,
+    "sem_min_tokens": 200,
+    "sem_max_tokens": 9000,
+    "flow_steps": 16,
+    "cfg_scale": 1.0,
+    "seed": 555,
+    "cot_mode": "full"
+  },
+  "source_folder": "2026-09-14_080140_palpitate_the_wind_-_experimental_techno_progressive_hybrid"
+}
