@@ -1,10 +1,9 @@
-# renders: hundreds of MB, regenerable, not source.
-# note the /* — excluding "outputs/" itself would make the negation below unreachable
-/outputs/*
-!/outputs/favorites_page/
+# renders: hundreds of MB, regenerable, not source
+/outputs/
 
-# inside the published page, keep the MP3s but never the lossless masters
-/outputs/favorites_page/audio/*.flac
+# the published page lives in docs/ because GitHub Pages only serves
+# the repository root or /docs from a branch
+/docs/audio/*.flac
 
 .venv/
 __pycache__/
