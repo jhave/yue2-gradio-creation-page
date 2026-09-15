@@ -1,0 +1,3663 @@
+#!/usr/bin/env python3
+"""
+YuE2 Studio - Local Web UI
+Advanced interactive studio for YuE2 on Apple Silicon (MPS) or CUDA.
+Features:
+ - Interactive ABC score editor with real-time section timing calculations
+ - Fast Draft vs. Master Flow Steps slider (8 to 32 steps)
+ - Temperature, Top-P, CFG, and Repetition Penalty controls
+ - Interactive waveform audio player
+ - Full Track Manager: easily see, rename, play, and reveal tracks in Finder
+"""
+
+import os
+import sys
+from pathlib import Path
+
+# Disable upper limit for MPS allocations on Apple Silicon to prevent OOM
+os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
+
+# Ensure running inside .venv
+root_dir = Path(__file__).resolve().parent
+venv_python = root_dir / ".venv" / "bin" / "python"
+if venv_python.exists() and Path(sys.executable).resolve() != venv_python.resolve():
+    os.execv(str(venv_python), [str(venv_python)] + sys.argv)
+
+src_dir = root_dir / "src"
+if src_dir.exists() and str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
+
+import dataclasses
+import math
+import datetime
+import html
+import json
+import re
+import shutil
+import subprocess
+import time
+import gradio as gr
+
+# Global pipeline instance
+_PIPELINE = None
+
+
+def get_pipeline():
+    global _PIPELINE
+    if _PIPELINE is None:
+        import torch
+        from yue2 import YuE2Pipeline
+        is_mps = torch.backends.mps.is_available()
+        # offload_ar moves the whole AR stack to CPU for the flow-solve stage and back
+        # again. On a discrete GPU that frees VRAM; on Apple Silicon the destination is
+        # the same physical RAM, so it is two full copies of a 3B model for nothing.
+        # Set YUE2_OFFLOAD_AR=1 to restore it if memory pressure appears.
+        offload_ar = os.environ.get("YUE2_OFFLOAD_AR", "0") == "1"
+        print(f"🎵 Initializing YuE2Pipeline in memory (MPS={is_mps}, offload_ar={offload_ar})...")
+        _PIPELINE = YuE2Pipeline.from_pretrained(
+            "m-a-p/YuE2-3B",
+            vae="m-a-p/YuE2-Vae",
+            device="auto",
+            memory_budget_gib=24,
+            offload_ar=offload_ar
+        )
+    return _PIPELINE
+
+
+def parse_abc_metrics(abc_text: str) -> str:
+    """Analyze ABC notation to calculate key, tempo, meters, and section durations."""
+    if not abc_text or not abc_text.strip():
+        return "No ABC score provided."
+
+    tempo_m = re.search(r"Q:1/4=(\d+)", abc_text)
+    tempo = int(tempo_m.group(1)) if tempo_m else 120
+    meter_m = re.search(r"M:(\d+)/(\d+)", abc_text)
+    beats_per_bar = int(meter_m.group(1)) if meter_m else 4
+    key_m = re.search(r"K:([A-G][b#]?[m]?)", abc_text)
+    key = key_m.group(1) if key_m else "Unknown"
+
+    is_vocal = False
+    curr_sec = "intro"
+    sec_bars = {}
+
+    for line in abc_text.splitlines():
+        line = line.strip()
+        if line.startswith("%"):
+            curr_sec = line.lstrip("%").strip()
+        elif line.startswith("V: Vocal"):
+            is_vocal = True
+        elif line.startswith("V: Ins"):
+            is_vocal = False
+        elif is_vocal and "|" in line and not line.startswith(("X:", "T:", "M:", "L:", "Q:", "K:", "V:")):
+            bars = line.count("|")
+            sec_bars[curr_sec] = sec_bars.get(curr_sec, 0) + bars
+
+    bar_sec = (60.0 / tempo) * beats_per_bar
+    total_bars = sum(sec_bars.values())
+    total_sec = total_bars * bar_sec
+
+    lines = [
+        f"**Key**: `{key}` | **Meter**: `{beats_per_bar}/4` | **Tempo**: `{tempo} BPM` | **Estimated Length**: `{int(total_sec // 60)}m {int(total_sec % 60):02d}s` ({total_bars} bars)",
+        "\n**Section Breakdown:**"
+    ]
+    for s, b in sec_bars.items():
+        lines.append(f"- **`%{s}`**: {b} bars (~{b * bar_sec:.1f}s)")
+
+    return "\n".join(lines)
+
+
+# ==================== PERSISTENT & FACTORY PRESETS ====================
+PRESETS_FILE = Path("presets.json")
+
+# The two generation stages want very different repetition penalties: the codec
+# stage suppresses looping, the symbolic stage must be free to restate a theme.
+SCORE_REP_PEN_DEFAULT = 1.005
+SEM_REP_PEN_DEFAULT = 1.18
+
+# Every tunable, in one canonical order. The UI builds its components from this,
+# presets serialise from it, and every wiring list is assembled from it, so a new
+# parameter is added in exactly one place.
+#   (key, default, type)
+PARAM_SPEC = [
+    ("score_temp",     0.75,  float),
+    ("score_top_p",    0.90,  float),
+    ("score_rep_pen",  1.005, float),
+    ("score_top_k",    30,    int),
+    ("score_pen_win",  100,   int),
+    ("sem_temp",       1.15,  float),
+    ("sem_top_p",      0.95,  float),
+    ("rep_pen",        1.18,  float),
+    ("sem_top_k",      100,   int),
+    ("sem_pen_win",    50,    int),
+    ("sem_min_tokens", 200,   int),
+    ("sem_max_tokens", 9000,  int),
+    ("cfg_scale",      1.0,   float),
+    ("flow_steps",     12,    int),
+    ("seed",           404,   int),
+    ("cot_mode",       "full", str),
+]
+PARAM_KEYS = [k for k, _, _ in PARAM_SPEC]
+PARAM_DEFAULTS = {k: d for k, d, _ in PARAM_SPEC}
+
+
+def param_value(preset, key):
+    """One parameter out of a stored preset, with the default for keys saved before it existed."""
+    default = PARAM_DEFAULTS[key]
+    caster = dict((k, t) for k, _, t in PARAM_SPEC)[key]
+    try:
+        return caster(preset.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def preset_params(preset):
+    """Every parameter of a stored preset, in canonical order."""
+    return [param_value(preset, k) for k in PARAM_KEYS]
+
+FACTORY_PRESETS = {
+    "Progressive Cyber-Hopkins Suite": {
+        "style": "English, progressive hybrid epic with drastic section transitions: begins with fragile spectral ambient choral drone, builds into angular math rock clean indie guitars, erupts into heavy lofi trap beat drop with gushing 808 sub-bass and rolling ricochet hi-hats, suddenly subsides into soft fragile tape-decay ambient breakdown, then crescendos into an explosive post-rock oceanic shimmer wall with soaring tremolo guitars and massive drums, dynamic whispered to soaring duet vocals, 134 BPM",
+        "lyrics": "[Intro - Spectral Ambient, Fragile Choral Whispers, Zero Percussion]\nDappled pings in deep fiber-folds\nCold-kernel... cached, strange\nFolded in unmapped range\n\n[Verse 1 - Math Post-Alt Indie, Clean Angular Guitars, Hesitant Slow Build]\nMorning’s admin, flash-cache wing\n(Voice 1) Brindled baud-rate, binary-bright\n(Voice 2) Bus-line tangled in dead-link night\nInstress, bit-sire, spit-myre\nBrimming over, slow collapse...\n\n[Pre-Drop - Rhythmic Tension, Ricochet Hat Accelerando]\nSkittering eight-oh-eight in a muffled ring\nCount the syncopated teeth...\nBrace the buffer spill!\n\n[Chorus - Explosive Lofi Trap Drop, Gushing 808 Ricochets, Heavy Sub-Bass]\nInscape lattice, velvet numb!\nRolling touch as the traces come!\n(Voice 1) Lossless, hyper-threaded\n(Voice 2) Bleeding out bandwidth sky\n(Duet) Sub-bass plunges raw-wound wire!\nParity permeable, phosphor glow\nFold the current down below!\n\n[Bridge - Sudden Subside to Ambient Spectral, Tape Decay, Soft Fragile Drone]\nBleed out the beat.\nBreathe in the bus.\nCold architecture murmuring hush.\nFragmented, fault-tolerant, frail...\n(Whispered close-mic)\nRock-racked router, sprung and slight\nGlitch-cluster clicking in soft backlight.\n\n[Climax - Massive Post-Rock Oceanic Shimmer Wall, Tremolo Reverb Crescendo, Soaring Drums]\nHigh-gain, heat-sink, off-beat caress!\nChecksum suspended in supple flesh!\nNot a frame dropped, caught in the crawl!\nDappled data on dendrite wall!\n(Soaring duet & oceanic guitar swell)\nEigen-node! Flash-cache wing!\nLet the infinite shimmer sing!\n\n[Outro - Slow Ambient Dissolve, Distant Choral Hiss]\nTrace in the latent space...\nDissolve into light.",
+        "custom_title": "progressive_cyber_hopkins",
+        "score_temp": 0.75,
+        "score_top_p": 0.9,
+        "sem_temp": 1.15,
+        "sem_top_p": 0.95,
+        "rep_pen": 1.18,
+        "cfg_scale": 1.0,
+        "seed": 404,
+        "flow_steps": 16
+    },
+    "Cybernetic Sprung-Hopkins Lofi Trap": {
+        "style": "English, intimate lofi trap merger, syncopated 808 sub-bass ricochets, tape flutter, imperfect choral and duet whispers, cybernetic sprung-rhythm cadence, 128 BPM",
+        "lyrics": "[Intro - Intimate Whispered Choral, Tape Flutter, Sub-Bass Hum]\n(Voice 1) Dappled pings in deep fiber-folds...\n(Voice 2) Cold-kernel cached, unmapped range.\n\n[Verse 1 - Sprung Cadence, Syncopated Close-Mic Whispers, Angular Guitars]\nMorning’s admin, flash-cache wing,\nBrindled baud-rate, binary-bright,\nBus-line tangled in dead-link night,\nInstress, bit-sire, spit-myre,\nBrimming over, slow collapse...\n\n[Chorus - Heavy Lofi 808 Drop, Rolling Ricochet Hats, Duet Vocals]\nInscape lattice, velvet numb!\nRolling touch as the traces come!\nSub-bass plunges raw-wound wire,\nParity permeable, phosphor glow,\nFold the current down below!\n\n[Bridge - Sudden Tape-Decay Breakdown, Fragile Drone]\nBleed out the beat.\nBreathe in the bus.\nRock-racked router, sprung and slight,\nGlitch-cluster clicking in soft backlight.\n\n[Outro - Syncopated Ricochet Fade]\nNot a frame dropped...\nCaught in the crawl.",
+        "custom_title": "cyber_hopkins_trap",
+        "score_temp": 0.8,
+        "score_top_p": 0.9,
+        "sem_temp": 1.12,
+        "sem_top_p": 0.95,
+        "rep_pen": 1.15,
+        "cfg_scale": 1.0,
+        "seed": 777,
+        "flow_steps": 16
+    },
+    "Quirky Lofi Math Shoegaze": {
+        "style": "English, lo-fi indie math rock, fuzzy shoegaze guitars, deadpan vocal fry, imperfect close-mic slacker delivery, angular clean chime riffs, hazy tape saturation, cassette hiss, dynamic swells, unpolished, 98 BPM",
+        "lyrics": "[Verse 1]\nUnphased abrupt interim truncated mood\nFit the glade glandular esoteric zoo\nEtching it, itching e, infinite finicky\nSpilling cold algorithms in a lukewarm \nStatic wire humming blue\nfragments as the tape bleeds through\n\n[Chorus]\nEtching it, itching e, count the syncopated teeth\nDrifting undertones tangled in the bedroom blur\nResolves the way you thought we were\n\n[Verse 2]\nAngular cadence in an off-beat crawl\nCassette flutter bouncing off unpainted wall\nA twitch of a knee, a flicker of lime\nSplitting seconds to justify time\nGlade glandular shadows cross the core\nLet the vintage chorus pulse in the pore\n\n[Chorus]\nPermeable permeable permeable\nDrifting drifting drifting\n\n[Bridge]\nAbrupt.\nInterim.\nTruncated spin.\nFrequencies collapse while feedback rushes in\n\n[Outro]\nPermeable permeable permeable\nDrifting drifting drifting",
+        "custom_title": "quirky_math_shoegaze",
+        "score_temp": 0.85,
+        "score_top_p": 0.92,
+        "sem_temp": 1.1,
+        "sem_top_p": 0.95,
+        "rep_pen": 1.25,
+        "cfg_scale": 1.0,
+        "seed": 108,
+        "flow_steps": 16
+    },
+    "Warm Acoustic Folk & Piano": {
+        "style": "English, warm piano pop, expressive female voice, acoustic piano, rounded bass and light drums, lyrical memorable melody, unhurried phrasing, 88 BPM",
+        "lyrics": "[Verse]\nNeon fades along the lane\nFootsteps keep the time of rain\nFold the night and leave it here\nMorning has a sky to clear\n\n[Chorus]\nLet the day come into view\nEvery road begins with you\nHold a little room for light\nWe will sing beyond the night",
+        "custom_title": "warm_acoustic_folk",
+        "score_temp": 0.65,
+        "score_top_p": 0.85,
+        "sem_temp": 0.95,
+        "sem_top_p": 0.92,
+        "rep_pen": 1.1,
+        "cfg_scale": 1.0,
+        "seed": 42,
+        "flow_steps": 16
+    }
+}
+
+_DELETE_CONFIRM_TARGET = None
+
+
+def load_all_presets():
+    """Load all presets, guaranteeing FACTORY_PRESETS are always present and protected."""
+    presets = dict(FACTORY_PRESETS)
+    if PRESETS_FILE.exists():
+        try:
+            data = json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    presets[k] = v
+        except Exception:
+            pass
+    return presets
+
+
+def save_presets_to_disk(presets):
+    """Save full presets dictionary to presets.json."""
+    PRESETS_FILE.write_text(json.dumps(presets, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _slugify_title(name):
+    """Filesystem-safe lowercase slug used to auto-derive a track title from a preset name."""
+    return re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
+
+
+def _field_signature(style, lyrics, custom_title, *values):
+    """Comparable snapshot of every value a preset stores."""
+    normalised = []
+    for (key, default, caster), value in zip(PARAM_SPEC, values):
+        try:
+            cast = caster(value)
+        except (TypeError, ValueError):
+            cast = default
+        normalised.append(round(cast, 4) if caster is float else cast)
+    return ((style or "").strip(), (lyrics or "").strip(), (custom_title or "").strip(),
+            tuple(normalised))
+
+
+def _stored_signature(preset):
+    """Presets saved before a parameter existed fall back to that parameter's default."""
+    return _field_signature(
+        preset.get("style", ""), preset.get("lyrics", ""), preset.get("custom_title", ""),
+        *preset_params(preset)
+    )
+
+
+def save_button_state(name, style, lyrics, custom_title, *values):
+    """Save button reports whether the current settings already exist under this name."""
+    clean = (name or "").strip()
+    if not clean:
+        return gr.update(value="Name this preset", variant="secondary", interactive=False)
+
+    presets = load_all_presets()
+    if clean not in presets:
+        return gr.update(value="💾 Save as New", variant="primary", interactive=True)
+
+    try:
+        unchanged = _stored_signature(presets[clean]) == _field_signature(
+            style, lyrics, custom_title, *values
+        )
+    except (TypeError, ValueError):
+        unchanged = False
+
+    if unchanged:
+        return gr.update(value="✓ Saved", variant="secondary", interactive=False)
+    if clean in FACTORY_PRESETS:
+        return gr.update(value="💾 Save as Copy", variant="primary", interactive=True)
+    return gr.update(value="💾 Save Changes", variant="primary", interactive=True)
+
+
+def select_preset(name, current_title, last_name):
+    """
+    Single-dropdown behaviour:
+      - an existing name loads that preset in full
+      - a newly typed name leaves the settings alone and only re-derives the
+        track title when the title was still inherited from the previous preset
+    """
+    global _DELETE_CONFIRM_TARGET
+    _DELETE_CONFIRM_TARGET = None
+
+    clean = (name or "").strip()
+    presets = load_all_presets()
+
+    if clean in presets:
+        p = presets[clean]
+        return tuple(
+            [p.get("style", ""), p.get("lyrics", ""), p.get("custom_title", "")]
+            + preset_params(p)
+            + [f"✅ Loaded **{clean}**.", clean]
+        )
+
+    prev = presets.get((last_name or "").strip(), {})
+    cur = (current_title or "").strip()
+    inherited = (
+        not cur
+        or cur == (prev.get("custom_title", "") or "").strip()
+        or cur == _slugify_title(last_name)
+    )
+    title_update = gr.update(value=_slugify_title(clean)) if (clean and inherited) else gr.update()
+    status = f"✏️ New preset **{clean}** — click Save to create it." if clean else ""
+
+    return tuple(
+        [gr.update(), gr.update(), title_update]
+        + [gr.update() for _ in PARAM_SPEC]
+        + [status, last_name]
+    )
+
+
+def revert_preset(name):
+    """Restore the fields to whatever is stored on disk under this preset name."""
+    clean = (name or "").strip()
+    width = 3 + len(PARAM_SPEC)
+    if clean not in load_all_presets():
+        return tuple(
+            [gr.update()] * width
+            + [f"⚠️ **{clean}** has never been saved — nothing to revert to.", clean]
+        )
+    res = list(select_preset(clean, "", clean))
+    res[width] = f"↺ Reverted **{clean}** to its saved state."
+    return tuple(res)
+
+
+def save_preset(name, style, lyrics, custom_title, *values):
+    """Create or overwrite a preset with every current field."""
+    clean_name = (name or "").strip()
+    if not clean_name:
+        return gr.update(), "⚠️ Please name the preset first.", gr.update(), gr.update()
+
+    # Factory templates stay pristine: saving over one forks a copy instead.
+    if clean_name in FACTORY_PRESETS:
+        clean_name = f"{clean_name} (My Take)"
+
+    entry = {
+        "style": (style or "").strip(),
+        "lyrics": (lyrics or "").strip(),
+        "custom_title": (custom_title or "").strip(),
+        "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    for (key, default, caster), value in zip(PARAM_SPEC, values):
+        try:
+            entry[key] = caster(value)
+        except (TypeError, ValueError):
+            entry[key] = default
+
+    presets = load_all_presets()
+    presets[clean_name] = entry
+    save_presets_to_disk(presets)
+
+    btn = save_button_state(clean_name, style, lyrics, custom_title, *values)
+    return (
+        gr.update(choices=list(presets.keys()), value=clean_name),
+        f"💾 Saved **{clean_name}**.",
+        clean_name,
+        btn
+    )
+
+
+def delete_custom_preset(name):
+    """Safely delete a custom preset with two-step confirmation and factory protection."""
+    global _DELETE_CONFIRM_TARGET
+    clean_name = (name or "").strip()
+    if not clean_name:
+        return gr.update(), "⚠️ No preset selected."
+
+    # 1. Protect Factory Presets
+    if clean_name in FACTORY_PRESETS:
+        _DELETE_CONFIRM_TARGET = None
+        return gr.update(), f"🛡️ **Protected Base Preset**: '{clean_name}' is a permanent factory template and cannot be deleted."
+
+    presets = load_all_presets()
+    if clean_name not in presets:
+        _DELETE_CONFIRM_TARGET = None
+        return gr.update(), f"❌ Preset '{clean_name}' not found."
+
+    # 2. Two-step confirmation for custom variations
+    if _DELETE_CONFIRM_TARGET != clean_name:
+        _DELETE_CONFIRM_TARGET = clean_name
+        return gr.update(), (
+            f"⚠️ **Confirm Deletion**: You are about to delete preset **'{clean_name}'**.\n"
+            f"Click **🗑️ Delete** once more to permanently remove it (or select another preset to cancel)."
+        )
+
+    # Proceed with deletion on 2nd click
+    _DELETE_CONFIRM_TARGET = None
+    if PRESETS_FILE.exists():
+        try:
+            stored = json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
+            if clean_name in stored:
+                del stored[clean_name]
+                save_presets_to_disk(stored)
+        except Exception:
+            pass
+
+    presets = load_all_presets()
+    choices = list(presets.keys())
+    fallback = choices[0] if choices else None
+    return gr.update(choices=choices, value=fallback), f"🗑️ Permanently removed preset **'{clean_name}'**."
+
+
+# ==================== LIVE PROGRESS & CANCELLATION ====================
+# The pipeline emits every generated token through on_token and polls `cancelled`
+# between steps. Without these the Gradio bar sits at one value for the whole
+# render, which is indistinguishable from a hang.
+
+_CANCEL = {"stop": False}
+
+
+def request_cancel():
+    """Ask the running generation to stop at its next token."""
+    _CANCEL["stop"] = True
+    return "🛑 Stopping at the next token..."
+
+
+def _is_cancelled():
+    return _CANCEL["stop"]
+
+
+def make_progress_hooks(progress, start_frac, token_frac, expected_tokens, label,
+                        audio_stage=False):
+    """
+    Two hooks driven by the pipeline itself.
+
+    on_token   fires per generated token — real counts and rate.
+    cancelled  is polled between tokens AND inside the ODE solver, so once the
+               token stream goes quiet it doubles as the heartbeat for the audio
+               synthesis stage, which emits no tokens.
+    """
+    _now = time.perf_counter()
+    state = {"n": 0, "t0": _now, "last": _now, "last_token": _now, "polls": 0}
+
+    def on_token(phase, token):
+        state["n"] += 1
+        now = time.perf_counter()
+        state["last_token"] = now
+        if now - state["last"] < 0.4:
+            return
+        state["last"] = now
+        n, elapsed = state["n"], now - state["t0"]
+        rate = n / elapsed if elapsed > 0 else 0.0
+        frac = start_frac + (token_frac - start_frac) * (1.0 - math.exp(-n / float(expected_tokens)))
+        progress(frac, desc=f"{label} — {n} tokens · {rate:.1f} tok/s · {int(elapsed)}s")
+
+    def cancelled():
+        if _CANCEL["stop"]:
+            return True
+        if not audio_stage:
+            return False
+        now = time.perf_counter()
+        # Tokens have stopped arriving: the flow solver is running.
+        if state["n"] > 0 and now - state["last_token"] > 2.0:
+            state["polls"] += 1
+            if now - state["last"] >= 0.5:
+                state["last"] = now
+                steps_done = state["polls"] // 2
+                frac = token_frac + (0.97 - token_frac) * (1.0 - math.exp(-steps_done / 24.0))
+                progress(frac, desc=f"🌊 Synthesizing audio — {steps_done} flow steps · "
+                                    f"{int(now - state['t0'])}s total")
+        return False
+
+    return on_token, cancelled
+
+
+def generate_plan_step(style, lyrics, seed, score_temp, score_top_p, score_rep_pen,
+                       score_top_k=30, score_pen_win=100, cot_mode="full",
+                       progress=gr.Progress()):
+    _CANCEL["stop"] = False
+    progress(0.02, desc="🎼 Loading model & planning score...")
+    pipe = get_pipeline()
+    score_temp = float(score_temp) if score_temp is not None else 0.75
+    score_top_p = float(score_top_p) if score_top_p is not None else 0.90
+    score_rep_pen = float(score_rep_pen) if score_rep_pen is not None else SCORE_REP_PEN_DEFAULT
+    seed = int(seed) if seed is not None else 404
+    cot_mode = (cot_mode or "full").strip() or "full"
+
+    if cot_mode == "off":
+        return "", "*Score mode is off — no ABC is generated; the model goes straight to audio.*", \
+               "ℹ️ Score mode **off**: nothing to plan. Use Synthesize Audio."
+
+    request = {
+        "style": (style or "").strip(),
+        "lyrics": (lyrics or "").strip(),
+        "cot": cot_mode,
+        "seed": seed,
+        "abc_sampling": {
+            "temperature": score_temp,
+            "top_p": score_top_p,
+            "repetition_penalty": score_rep_pen,
+            "top_k": int(score_top_k),
+            "penalty_window": int(score_pen_win),
+        }
+    }
+
+    start = time.perf_counter()
+    on_token, cancelled = make_progress_hooks(progress, 0.05, 0.95, 1400, "🎼 Planning score")
+    try:
+        plan = pipe.plan(**request, cancelled=cancelled, on_token=on_token)
+    except InterruptedError:
+        return "", "", "🛑 Planning cancelled."
+    elapsed = time.perf_counter() - start
+
+    abc = plan.abc or ""
+    metrics = parse_abc_metrics(abc)
+    mode_note = " · melody only" if cot_mode == "melody" else ""
+    status_msg = f"✅ Plan generated in {elapsed:.1f}s ({len(plan.abc_ids)} tokens{mode_note})"
+
+    return abc, metrics, status_msg
+
+
+def extract_lyric_keywords(lyrics_text):
+    """Extract key chorus words or opening lyrics for song identification."""
+    if not lyrics_text or not lyrics_text.strip():
+        return "Track"
+
+    text = lyrics_text.strip()
+
+    # 1. Look for [Chorus...] or [Hook...] or [Refrain...]
+    chorus_match = re.search(r"\[(?:Chorus|Hook|Refrain)[^\]]*\]\s*([^\[]+)", text, re.IGNORECASE)
+    candidate_lines = []
+    if chorus_match:
+        section_body = chorus_match.group(1).strip()
+        candidate_lines = [line.strip() for line in section_body.splitlines() if line.strip()]
+
+    # 2. If no chorus section found, look for first non-section line
+    if not candidate_lines:
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.startswith("["):
+                candidate_lines.append(line)
+                break
+
+    if not candidate_lines:
+        return "Track"
+
+    # Take first line and remove parenthetical directions e.g. (Voice 1), (Duet), etc.
+    first_line = candidate_lines[0]
+    first_line = re.sub(r"\([^)]*\)", "", first_line)
+
+    # Clean punctuation except letters, numbers, spaces
+    words = re.findall(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?", first_line)
+    if not words:
+        return "Track"
+
+    # Pick first 2 to 4 prominent words (up to ~28 chars total)
+    selected_words = []
+    total_len = 0
+    for w in words:
+        if len(selected_words) >= 4 or (total_len + len(w) > 28 and len(selected_words) >= 2):
+            break
+        selected_words.append(w.capitalize() if w.islower() else w)
+        total_len += len(w) + 1
+
+    return " ".join(selected_words) if selected_words else "Track"
+
+
+def sanitize_song_id(text):
+    """Filesystem-safe song identifier: spaces and illegal characters become underscores."""
+    cleaned = re.sub(r"[^\w.-]+", "_", (text or "").strip(), flags=re.UNICODE)
+    cleaned = re.sub(r"_{2,}", "_", cleaned).strip("._")
+    return cleaned[:80]
+
+
+# Short codes for the folder-name delta tag, so A/B renders of one song are
+# distinguishable at a glance in Finder without the old 120-character names.
+PARAM_CODES = {
+    "score_temp": "hx", "score_top_p": "stp", "score_rep_pen": "srp",
+    "score_top_k": "stk", "score_pen_win": "sw",
+    "sem_temp": "vw", "sem_top_p": "mtp", "rep_pen": "vrp",
+    "sem_top_k": "mtk", "sem_pen_win": "mw",
+    "sem_min_tokens": "min", "sem_max_tokens": "max",
+    "cfg_scale": "cfg", "flow_steps": "fs", "seed": "sd", "cot_mode": "mode",
+}
+
+
+def _fmt_param(value):
+    if isinstance(value, float):
+        text = f"{value:g}"
+        return text.lstrip("0") if text.startswith("0.") else text
+    return str(value)
+
+
+def build_param_delta_tag(preset_name, params, limit=4):
+    """
+    Compact tag naming only what differs from the preset's saved baseline, e.g.
+    [vw1.35_stk80]. Renders of one song at different settings stay distinguishable
+    without encoding all sixteen parameters.
+    """
+    if not params:
+        return ""
+    baseline = load_all_presets().get((preset_name or "").strip(), {})
+    bits = []
+    for key, default, caster in PARAM_SPEC:
+        if key not in params:
+            continue
+        try:
+            current = caster(params[key])
+            base = caster(baseline.get(key, default))
+        except (TypeError, ValueError):
+            continue
+        if isinstance(current, float):
+            same = abs(current - base) < 1e-9
+        else:
+            same = current == base
+        if not same:
+            bits.append(f"{PARAM_CODES.get(key, key)}{_fmt_param(current)}")
+    if not bits:
+        return ""
+    if len(bits) > limit:
+        bits = bits[:limit] + ["etc"]
+    return "[" + "_".join(bits) + "]"
+
+
+# ==================== ARCHIVE FORMAT ====================
+# The pipeline writes 24-bit FLAC (~11 MB per minute). latent.npy is ~0.4 MB per
+# minute and the VAE decode is deterministic, so latents + MP3 is a complete
+# archive: the lossless file can be regenerated exactly, in seconds, on demand.
+AUDIO_FORMATS = {
+    "mp3 320 + latents": ("mp3", "320k"),
+    "mp3 192 + latents": ("mp3", "192k"),
+    "flac + mp3": ("both", "320k"),
+    "flac (lossless)": ("flac", None),
+}
+DEFAULT_AUDIO_FORMAT = "mp3 320 + latents"
+
+
+def encode_mp3(flac_path, dest, bitrate="320k"):
+    """FLAC -> MP3 via libsndfile (>=1.1 writes MP3), falling back to ffmpeg."""
+    import shutil
+    dest = Path(dest)
+    try:
+        import soundfile as sf
+        if "MP3" in sf.available_formats():
+            data, rate = sf.read(str(flac_path), always_2d=True)
+            sf.write(str(dest), data, rate, format="MP3",
+                     subtype="MPEG_LAYER_III" if "MPEG_LAYER_III" in sf.available_subtypes("MP3") else None)
+            if dest.exists() and dest.stat().st_size > 1024:
+                return True
+        dest.unlink(missing_ok=True)
+    except Exception:
+        dest.unlink(missing_ok=True)
+
+    if shutil.which("ffmpeg"):
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error", "-i", str(flac_path),
+                 "-codec:a", "libmp3lame", "-b:a", bitrate, str(dest)],
+                check=True, timeout=900
+            )
+            return dest.exists() and dest.stat().st_size > 1024
+        except Exception:
+            dest.unlink(missing_ok=True)
+    return False
+
+
+def apply_audio_format(output_dir, folder_name, fmt_label):
+    """
+    Convert and prune the rendered audio to the chosen archive format.
+    Returns (path_to_playable_audio, note).
+    """
+    mode, bitrate = AUDIO_FORMATS.get(fmt_label, AUDIO_FORMATS[DEFAULT_AUDIO_FORMAT])
+    output_dir = Path(output_dir)
+    default_flac = output_dir / "audio.flac"
+    named_flac = output_dir / f"{folder_name}.flac"
+    source = named_flac if named_flac.exists() else default_flac
+    if not source.exists():
+        return None, "no audio written"
+
+    if mode == "flac":
+        return str(source), "24-bit FLAC"
+
+    mp3_path = output_dir / f"{folder_name}.mp3"
+    if not encode_mp3(source, mp3_path, bitrate or "320k"):
+        return str(source), "MP3 encoder unavailable — kept FLAC"
+
+    if mode == "both":
+        return str(mp3_path), f"MP3 {bitrate} + FLAC"
+
+    # mp3 only: latent.npy still reconstructs the lossless master exactly.
+    # The two names share one inode, so count the bytes once.
+    freed, seen = 0, set()
+    for f in (named_flac, default_flac):
+        if f.exists():
+            try:
+                st = f.stat()
+                if st.st_ino not in seen:
+                    seen.add(st.st_ino)
+                    freed += st.st_size
+                f.unlink()
+            except OSError:
+                pass
+    if (output_dir / "latent.npy").exists():
+        note = f"MP3 {bitrate}; {freed / 1e6:.0f} MB of FLAC dropped (re-decodable from latents)"
+    else:
+        note = f"MP3 {bitrate}; {freed / 1e6:.0f} MB of FLAC dropped"
+    return str(mp3_path), note
+
+
+def upgrade_flow_steps(track_name, steps=32, progress=gr.Progress()):
+    """
+    Re-solve the flow stage at a higher step count using the semantic tokens
+    already on disk. The autoregressive stage — the five-minute one — is skipped
+    entirely: semantic.npy holds its output, and the plan files hold the prefix
+    it was conditioned on. Preview at 8-12 steps, upgrade the keepers to 32.
+    """
+    if not track_name:
+        return None, "⚠️ No track selected."
+
+    track_dir = Path("outputs") / track_name
+    tokens_file = track_dir / "semantic.npy"
+    if not tokens_file.exists():
+        return None, f"❌ `{track_name}` has no semantic.npy — nothing to re-solve from."
+    if not (track_dir / "plan_manifest.json").exists():
+        return None, f"❌ `{track_name}` has no saved plan; a full re-render is the only route."
+
+    steps = int(steps)
+    target = track_dir / f"{track_name}_{steps}steps.flac"
+    if target.exists():
+        return str(target), f"✅ `{target.name}` already present."
+
+    _CANCEL["stop"] = False
+    progress(0.02, desc=f"Loading plan & semantic tokens...")
+
+    try:
+        import numpy as np
+        import soundfile as sf
+        from yue2.pipeline import SymbolicPlan, SemanticResult
+
+        pipe = get_pipeline()
+        plan = SymbolicPlan.load(track_dir)
+        tokens = np.load(tokens_file, allow_pickle=False).tolist()
+        semantic = SemanticResult(plan, tokens, {}, False)
+
+        previous = pipe.generation_config
+        pipe.generation_config = dataclasses.replace(previous, ode_steps=steps)
+
+        on_token, cancelled = make_progress_hooks(
+            progress, 0.05, 0.05, 1, f"🌊 Re-solving at {steps} steps", audio_stage=True
+        )
+        start = time.perf_counter()
+        try:
+            latents = pipe.synthesize(semantic, cancelled=cancelled)
+            progress(0.9, desc="Decoding audio...")
+            audio = pipe.decode(latents)
+        finally:
+            pipe.generation_config = previous
+
+        sf.write(str(target), audio, 48000, subtype="PCM_24")
+        elapsed = time.perf_counter() - start
+    except InterruptedError:
+        return None, "🛑 Upgrade cancelled."
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return None, f"❌ Upgrade failed: {exc}"
+
+    meta = read_track_metadata(track_dir)
+    if meta:
+        meta.setdefault("upgrades", []).append(
+            {"flow_steps": steps, "file": target.name,
+             "at": datetime.datetime.now().isoformat(timespec="seconds")}
+        )
+        try:
+            (track_dir / "track.json").write_text(
+                json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    size = target.stat().st_size / 1e6
+    return str(target), (f"⬆ Re-solved at {steps} steps in {elapsed:.0f}s — `{target.name}` "
+                         f"({size:.0f} MB). Generation was not re-run.")
+
+
+def redecode_lossless(track_name):
+    """Rebuild the 24-bit FLAC from latent.npy — VAE decode only, no regeneration."""
+    if not track_name:
+        return None, "⚠️ No track selected."
+    track_dir = Path("outputs") / track_name
+    latents_file = track_dir / "latent.npy"
+    if not latents_file.exists():
+        return None, f"❌ `{track_name}` has no latent.npy to decode from."
+
+    target = track_dir / f"{track_name}.flac"
+    if target.exists():
+        return str(target), f"✅ `{target.name}` already present."
+
+    try:
+        import numpy as np
+        import soundfile as sf
+        pipe = get_pipeline()
+        latents = np.load(latents_file, allow_pickle=False)
+        start = time.perf_counter()
+        audio = pipe.decode(latents)
+        sf.write(str(target), audio, 48000, subtype="PCM_24")
+        elapsed = time.perf_counter() - start
+    except Exception as exc:
+        return None, f"❌ Decode failed: {exc}"
+
+    size = target.stat().st_size / 1e6
+    return str(target), f"🎧 Rebuilt `{target.name}` ({size:.0f} MB, 24-bit) in {elapsed:.1f}s."
+
+
+def build_track_folder_name(custom_title, lyrics_text, when=None, tag=""):
+    """
+    Sortable folder name: YYYY-MM-DD_HHMMSS_song_name[delta tag]
+    Full parameters still travel with the track in track.json.
+    """
+    when = when or datetime.datetime.now()
+    stamp = when.strftime("%Y-%m-%d_%H%M%S")
+    song_id = sanitize_song_id(custom_title) or sanitize_song_id(extract_lyric_keywords(lyrics_text)) or "YuE_Track"
+    suffix = f"_{tag}" if tag else ""
+    return f"{stamp}_{song_id}{suffix}"
+
+
+PARAM_LABELS = {
+    "score_temp": "Harmonic Exploration",
+    "score_top_p": "Score Top-P",
+    "score_rep_pen": "Score Repetition",
+    "score_top_k": "Score Top-K",
+    "score_pen_win": "Score Penalty Window",
+    "sem_temp": "Vocal Wildness",
+    "sem_top_p": "Semantic Top-P",
+    "rep_pen": "Vocal Repetition",
+    "sem_top_k": "Semantic Top-K",
+    "sem_pen_win": "Vocal Penalty Window",
+    "sem_min_tokens": "Min Length",
+    "sem_max_tokens": "Max Length",
+    "cfg_scale": "CFG",
+    "flow_steps": "Flow Steps",
+    "seed": "Seed",
+    "cot_mode": "Score Mode",
+}
+
+
+def write_track_metadata(output_dir, folder_name, track_title, preset_name,
+                         style, lyrics, params, audio_path=None,
+                         elapsed=None, audio_seconds=None, favorite=False):
+    """
+    Write track.json beside the audio and, when mutagen is available, stamp the
+    same values into the FLAC's Vorbis comments so the file carries them alone.
+    `params` is a dict keyed by PARAM_KEYS.
+    """
+    clean = {}
+    for key, default, caster in PARAM_SPEC:
+        try:
+            clean[key] = caster(params.get(key, default))
+        except (TypeError, ValueError):
+            clean[key] = default
+
+    meta = {
+        "folder": folder_name,
+        "track_title": (track_title or "").strip(),
+        "preset": (preset_name or "").strip(),
+        "created": datetime.datetime.now().isoformat(timespec="seconds"),
+        "favorite": bool(favorite),
+        "style": (style or "").strip(),
+        "lyrics": (lyrics or "").strip(),
+        "parameters": clean,
+    }
+    if elapsed is not None:
+        meta["render_seconds"] = round(float(elapsed), 1)
+    if audio_seconds is not None:
+        meta["audio_seconds"] = round(float(audio_seconds), 1)
+
+    try:
+        (Path(output_dir) / "track.json").write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+    if audio_path:
+        try:
+            from mutagen.flac import FLAC
+            tags = FLAC(str(audio_path))
+            tags["title"] = meta["track_title"] or folder_name
+            tags["album"] = meta["preset"] or "YuE2"
+            tags["date"] = meta["created"][:10]
+            tags["comment"] = json.dumps(meta["parameters"], ensure_ascii=False)
+            tags["description"] = meta["style"]
+            tags.save()
+        except Exception:
+            pass
+
+    return meta
+
+
+def read_track_metadata(track_dir):
+    """track.json for a render, or {} when it predates the sidecar."""
+    meta_file = Path(track_dir) / "track.json"
+    if meta_file.exists():
+        try:
+            data = json.loads(meta_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def save_display_name(track_name, display_name):
+    """A human title for the playlist page, independent of the folder name."""
+    if not track_name:
+        return "⚠️ No track selected."
+    track_dir = Path("outputs") / track_name
+    if not track_dir.is_dir():
+        return f"❌ Track '{track_name}' not found."
+    meta = read_track_metadata(track_dir) or {"folder": track_name, "parameters": {}}
+    clean = (display_name or "").strip()
+    if clean:
+        meta["display_name"] = clean
+    else:
+        meta.pop("display_name", None)
+    try:
+        (track_dir / "track.json").write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:
+        return f"❌ Could not write track.json: {exc}"
+    return f"🏷️ `{track_name}` → **{clean}**" if clean else f"🏷️ Cleared the display name."
+
+
+def load_display_name(track_name):
+    if not track_name:
+        return ""
+    return read_track_metadata(Path("outputs") / track_name).get("display_name", "")
+
+
+def public_title(meta, folder_name):
+    """What a listener should see: display name, else track title, else the folder."""
+    return (meta.get("display_name") or meta.get("track_title") or folder_name).strip()
+
+
+def public_slug(title, taken):
+    """URL-safe, collision-free file stem for the served folder."""
+    base = re.sub(r"[^a-z0-9]+", "-", (title or "track").lower()).strip("-")[:60] or "track"
+    slug, n = base, 2
+    while slug in taken:
+        slug, n = f"{base}-{n}", n + 1
+    taken.add(slug)
+    return slug
+
+
+def save_track_notes(track_name, notes):
+    """Accompanying text for a track, stored in its track.json for the playlist page."""
+    if not track_name:
+        return "⚠️ No track selected."
+    track_dir = Path("outputs") / track_name
+    if not track_dir.is_dir():
+        return f"❌ Track '{track_name}' not found."
+    meta = read_track_metadata(track_dir) or {"folder": track_name, "parameters": {}}
+    meta["notes"] = (notes or "").strip()
+    try:
+        (track_dir / "track.json").write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception as exc:
+        return f"❌ Could not write track.json: {exc}"
+    return f"📝 Saved notes for `{track_name}`."
+
+
+def load_track_notes(track_name):
+    if not track_name:
+        return ""
+    return read_track_metadata(Path("outputs") / track_name).get("notes", "")
+
+
+PLAYLIST_DIR = Path("outputs") / "favorites_page"
+
+
+def _to_mp3(flac_path, dest, bitrate="320k"):
+    """
+    FLAC -> MP3 for the web page. libsndfile >= 1.1 writes MP3 directly; ffmpeg is
+    the fallback. If neither works the FLAC is copied and linked as-is (Safari,
+    Chrome and Firefox all decode FLAC, the files are simply large).
+    """
+    import shutil
+    dest, source = Path(dest), Path(flac_path)
+    if source.suffix.lower() == ".mp3":
+        shutil.copy2(source, dest)
+        return dest.name, "mp3"
+    if encode_mp3(source, dest, bitrate):
+        return dest.name, "mp3"
+    fallback = dest.with_suffix(".flac")
+    shutil.copy2(source, fallback)
+    return fallback.name, "flac"
+
+
+PLAYLIST_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root { --ink:#18181b; --muted:#71717a; --line:#e4e4e7; --bg:#fbfbfc; --accent:#7c3aed; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#ededf0; --muted:#a1a1aa; --line:#2a2a31; --bg:#151518; --accent:#a78bfa; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.65 ui-sans-serif,-apple-system,"Helvetica Neue",sans-serif; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 48px 20px 96px; }
+  h1 { font-size: 1.7rem; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 0.88rem; margin: 0 0 36px; }
+
+  /* ---- EDIT ME: intro text ---- */
+  .intro { margin: 0 0 40px; }
+  .intro p { margin: 0 0 14px; }
+
+  .track { border-top: 1px solid var(--line); padding: 26px 0; }
+  .track h2 { font-size: 1.06rem; font-weight: 650; margin: 0 0 2px; }
+  .meta { color: var(--muted); font-size: 0.8rem; margin: 0 0 12px; }
+  .meta span + span::before { content: " · "; }
+  audio { width: 100%; margin: 6px 0 12px; }
+  .note { margin: 10px 0 0; }
+  .note:empty { display: none; }
+  details { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px;
+            padding: 0 12px; background: rgba(124,58,237,0.035); }
+  details[open] { padding-bottom: 12px; }
+  summary { cursor: pointer; padding: 9px 0; font-size: 0.82rem; color: var(--accent);
+            font-weight: 600; list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "▸ "; }
+  details[open] summary::before { content: "▾ "; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.79rem; }
+  td { padding: 3px 0; vertical-align: top; }
+  td:first-child { color: var(--muted); width: 52%; padding-right: 12px; }
+  td:last-child { font-variant-numeric: tabular-nums; }
+  .prompt { font-size: 0.79rem; color: var(--muted); margin: 10px 0 0;
+            white-space: pre-wrap; }
+  footer { border-top: 1px solid var(--line); margin-top: 40px; padding-top: 18px;
+           color: var(--muted); font-size: 0.76rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>__TITLE__</h1>
+<p class="sub">__SUBTITLE__</p>
+
+<!-- ===== EDIT ME: introduction ===== -->
+<div class="intro">
+__INTRO__
+</div>
+<!-- ===== /EDIT ME ===== -->
+
+__TRACKS__
+
+<footer>__FOOTER__</footer>
+</div>
+</body>
+</html>
+"""
+
+
+def build_favorites_page(title="Favorites", subtitle="", convert_mp3=True):
+    """
+    Write a self-contained, servable folder:
+
+        favorites_page/
+          index.html          data inlined, so it works from file:// and from a server
+          index.json          the whole playlist
+          audio/<slug>.mp3    named from the display name, not the render folder
+          data/<slug>.json    one file per track, full parameters and prompt
+
+    Nothing in the served folder carries a 120-character render name.
+    """
+    favs = [t for t in get_track_data()
+            if t.get("rating") is not None and t["rating"] >= FAVORITE_THRESHOLD]
+    favs.sort(key=lambda t: -(t.get("rating") or 0))
+    if not favs:
+        return f"⚠️ Nothing rated {FAVORITE_THRESHOLD}+ yet.", None
+
+    audio_dir = PLAYLIST_DIR / "audio"
+    data_dir = PLAYLIST_DIR / "data"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    page_path = PLAYLIST_DIR / "index.html"
+    intro = ("<p>Renders kept from the YuE2 sessions. Open a track's parameters to see "
+             "what produced it.</p>")
+    if page_path.exists():
+        try:
+            previous = page_path.read_text(encoding="utf-8")
+            start = previous.index('<div class="intro">') + len('<div class="intro">')
+            kept = previous[start:previous.index("<!-- ===== /EDIT ME ===== -->")]
+            kept = kept.rsplit("</div>", 1)[0].strip()
+            if kept:
+                intro = kept
+        except (ValueError, OSError):
+            pass
+
+    taken, entries, converted = set(), [], 0
+    for track in favs:
+        meta = read_track_metadata(Path(track["path"]))
+        shown = public_title(meta, track["name"])
+        slug = public_slug(shown, taken)
+
+        audio_href = ""
+        if track.get("audio"):
+            target = audio_dir / f"{slug}.mp3"
+            existing = next((c for c in (target, target.with_suffix(".flac")) if c.exists()), None)
+            if existing:
+                audio_href = f"audio/{existing.name}"
+            else:
+                name, kind = _to_mp3(track["audio"], target) if convert_mp3 else (None, None)
+                if name is None:
+                    import shutil
+                    shutil.copy2(track["audio"], audio_dir / f"{slug}.flac")
+                    name = f"{slug}.flac"
+                elif kind == "mp3":
+                    converted += 1
+                audio_href = f"audio/{name}"
+
+        entry = {
+            "slug": slug,
+            "title": shown,
+            "audio": audio_href,
+            "rating": track.get("rating"),
+            "preset": meta.get("preset", ""),
+            "created": meta.get("created", ""),
+            "duration": track.get("duration", ""),
+            "key_bpm": track.get("key_bpm", ""),
+            "style": track.get("style", ""),
+            "lyrics": track.get("lyrics", ""),
+            "notes": meta.get("notes", ""),
+            "parameters": meta.get("parameters", {}),
+            "source_folder": track["name"],
+        }
+        entries.append(entry)
+        (data_dir / f"{slug}.json").write_text(
+            json.dumps(entry, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    (PLAYLIST_DIR / "index.json").write_text(
+        json.dumps({"title": title, "generated": datetime.datetime.now().isoformat(timespec="seconds"),
+                    "tracks": entries}, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    sections = []
+    for entry in entries:
+        rows = "".join(
+            f"<tr><td>{PARAM_LABELS.get(k, k)}</td><td>{entry['parameters'][k]}</td></tr>"
+            for k in PARAM_KEYS if k in entry["parameters"]
+        ) or "<tr><td>no parameters recorded</td><td>—</td></tr>"
+
+        bits = []
+        if entry["rating"] is not None:
+            bits.append(f"<span>{rating_stars(entry['rating'])}</span>")
+        for value in (entry["duration"], entry["key_bpm"], entry["created"][:10]):
+            if value and value != "-":
+                bits.append(f"<span>{html.escape(str(value))}</span>")
+
+        player = (f'<audio controls preload="none" src="{html.escape(entry["audio"])}"></audio>'
+                  if entry["audio"] else '<p class="meta">no audio file</p>')
+        note = html.escape(entry["notes"]).replace("\n", "<br>")
+
+        sections.append(f"""<section class="track" id="{html.escape(entry['slug'])}">
+  <h2>{html.escape(entry['title'])}</h2>
+  <p class="meta">{''.join(bits)}</p>
+  {player}
+  <!-- EDIT ME: note for this track -->
+  <p class="note">{note}</p>
+  <details>
+    <summary>parameters</summary>
+    <table>{rows}</table>
+    <p class="prompt">{html.escape(entry['style'][:600])}</p>
+    <p class="prompt"><a href="data/{html.escape(entry['slug'])}.json">full record</a></p>
+  </details>
+</section>""")
+
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    page = (PLAYLIST_TEMPLATE
+            .replace("__TITLE__", html.escape(title or "Favorites"))
+            .replace("__SUBTITLE__", html.escape(subtitle or f"{len(entries)} tracks"))
+            .replace("__INTRO__", intro)
+            .replace("__TRACKS__", "\n\n".join(sections))
+            .replace("__FOOTER__", f"Generated {stamp}. Audio in audio/, one JSON per track in "
+                                   f"data/, the whole playlist in index.json. Edit this file "
+                                   f"freely; rebuilding preserves the intro block."))
+    page_path.write_text(page, encoding="utf-8")
+
+    unnamed = sum(1 for t in favs
+                  if not read_track_metadata(Path(t["path"])).get("display_name"))
+    tail = (f" {unnamed} track(s) have no display name and fell back to the folder name."
+            if unnamed else "")
+    fmt = f"{converted} converted to MP3" if converted else "audio copied as-is"
+    return (f"🌐 Wrote `{page_path}` — {len(entries)} track(s), {fmt}. "
+            f"The whole `favorites_page` folder is servable as-is.{tail}"), str(page_path)
+
+
+def playlist_names(min_rating_label="all"):
+    return [t["name"] for t in filter_by_rating(get_track_data(), min_rating_label)]
+
+
+def step_track(current, min_rating_label="all", step=1):
+    """Move through the listing currently on screen, wrapping at both ends."""
+    names = playlist_names(min_rating_label)
+    if not names:
+        return gr.update()
+    if current in names:
+        return names[(names.index(current) + step) % len(names)]
+    return names[0]
+
+
+def advance_if_autoplay(current, min_rating_label, autoplay):
+    """Audio.stop fires when a track finishes; carry on down the list if asked."""
+    if not autoplay:
+        return gr.update()
+    return step_track(current, min_rating_label, 1)
+
+
+def star_report_markdown():
+    """Comparison of starred against unstarred renders (analysis.py)."""
+    try:
+        import importlib
+        import analysis
+        importlib.reload(analysis)
+        return analysis.build_report()
+    except Exception as exc:
+        return f"❌ Could not build the report: {exc}"
+
+
+def save_favs_preset():
+    try:
+        import importlib
+        import analysis
+        importlib.reload(analysis)
+        message, name = analysis.save_starred_preset()
+    except Exception as exc:
+        return f"❌ {exc}", gr.update()
+    if name is None:
+        return message, gr.update()
+    return message, gr.update(choices=list(load_all_presets().keys()))
+
+
+def favorites_playlist_markdown():
+    """Ordered list of starred tracks for the Library panel."""
+    favs = [t for t in get_track_data()
+            if t.get("rating") is not None and t["rating"] >= FAVORITE_THRESHOLD]
+    favs.sort(key=lambda t: -(t.get("rating") or 0))
+    if not favs:
+        return f"*Nothing rated {FAVORITE_THRESHOLD}+ yet.*"
+    lines = []
+    for i, t in enumerate(favs, 1):
+        meta = read_track_metadata(Path(t["path"]))
+        title = public_title(meta, t["name"])
+        bits = [b for b in (rating_stars(t.get("rating")), meta.get("preset", ""),
+                            t.get("duration", ""), t.get("key_bpm", "")) if b and b != "-"]
+        lines.append(f"{i}. **{title}**  \n<span style='opacity:.65;font-size:.8em'>{' · '.join(bits)}</span>")
+    return "\n".join(lines)
+
+
+# ==================== RATING ====================
+# 0-5, and ABSENT IS NOT ZERO. A missing rating means never judged; a 0 means
+# listened to and rejected. Collapsing those two was the defect in the binary
+# star: every comparison counted unheard renders as evidence against.
+RATING_MAX = 5
+RATING_CHOICES = ["—", "0", "1★", "2★", "3★", "4★", "5★"]
+FILTER_CHOICES = ["all", "unrated", "0+", "1★+", "2★+", "3★+", "4★+", "5★"]
+FAVORITE_THRESHOLD = 4  # what "favorite" now means, for the playlist and the page
+
+
+def rating_of(meta):
+    """Integer 0-5, or None when the track has never been judged."""
+    if not isinstance(meta, dict):
+        return None
+    value = meta.get("rating")
+    if value is None:
+        if meta.get("favorite"):      # pre-rating sidecars carried a boolean star
+            return FAVORITE_THRESHOLD
+        return None
+    try:
+        return max(0, min(RATING_MAX, int(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def rating_label(value):
+    if value is None:
+        return RATING_CHOICES[0]
+    return RATING_CHOICES[min(max(int(value), 0), RATING_MAX) + 1]
+
+
+def label_to_rating(label):
+    """First digit in the label, or None for '—', 'all' and 'unrated'."""
+    if not label or label in (RATING_CHOICES[0], "all", "unrated"):
+        return None
+    digits = re.match(r"\s*(\d)", str(label))
+    return int(digits.group(1)) if digits else None
+
+
+def rating_stars(value):
+    if value is None:
+        return ""
+    return "✕" if value == 0 else "★" * value
+
+
+def set_rating(track_name, label):
+    """Write a rating into the track's sidecar. Returns (label, status)."""
+    value = label_to_rating(label)
+    if not track_name:
+        return label, "⚠️ No track selected."
+
+    track_dir = Path("outputs") / track_name
+    if not track_dir.is_dir():
+        return label, f"❌ Track '{track_name}' not found."
+
+    meta = read_track_metadata(track_dir)
+    if not meta:
+        meta = {"folder": track_name, "track_title": track_name,
+                "created": datetime.datetime.now().isoformat(timespec="seconds"),
+                "parameters": {}}
+
+    if label == RATING_CHOICES[0]:
+        meta.pop("rating", None)
+        meta.pop("rated_at", None)
+        meta["favorite"] = False
+        note = f"↺ Cleared the rating on `{track_name}`."
+    else:
+        value = 0 if value is None else value
+        meta["rating"] = value
+        meta["rated_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+        meta["favorite"] = value >= FAVORITE_THRESHOLD
+        note = f"{rating_stars(value)} `{track_name}` rated {value}/5."
+
+    try:
+        (track_dir / "track.json").write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception as exc:
+        return label, f"❌ Could not write track.json: {exc}"
+    return label, note
+
+
+def rating_for_track(track_name):
+    if not track_name:
+        return RATING_CHOICES[0]
+    return rating_label(rating_of(read_track_metadata(Path("outputs") / track_name)))
+
+
+def migrate_ratings():
+    """
+    favorite:true -> rating 4. favorite:false/absent stays UNRATED, not 0 —
+    those tracks were never judged, and recording them as rejections would
+    invent data the analysis would then treat as evidence.
+    """
+    moved = 0
+    outputs = Path("outputs")
+    if not outputs.is_dir():
+        return "No outputs directory."
+    for folder in sorted(p for p in outputs.iterdir() if p.is_dir()):
+        meta_file = folder / "track.json"
+        if not meta_file.exists():
+            continue
+        meta = read_track_metadata(folder)
+        if "rating" in meta:
+            continue
+        if meta.get("favorite"):
+            meta["rating"] = FAVORITE_THRESHOLD
+            meta["rated_at"] = meta.get("created",
+                                        datetime.datetime.now().isoformat(timespec="seconds"))
+            try:
+                meta_file.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
+                                     encoding="utf-8")
+                moved += 1
+            except Exception:
+                pass
+    return (f"✅ Migrated {moved} starred track(s) to rating {FAVORITE_THRESHOLD}. "
+            f"Everything else stays unrated — unheard is not the same as rejected.")
+
+
+# ==================== PRESET SCORING ====================
+# A preset is scored by the renders made with it, so nothing is rated twice.
+
+def preset_scores():
+    """{preset name: (mean rating, number of rated renders)}"""
+    buckets = {}
+    for track in get_track_data():
+        name = (track.get("preset") or "").strip()
+        value = track.get("rating")
+        if not name or value is None:
+            continue
+        buckets.setdefault(name, []).append(value)
+    return {name: (sum(v) / len(v), len(v)) for name, v in buckets.items()}
+
+
+def visible_preset_choices(show_all=False, min_score=3.0, limit=25):
+    """
+    Factory presets and presets with no rated renders always show — untested is
+    not rejected. Everything else needs a mean at or above min_score, capped at
+    `limit` entries, best first.
+    """
+    presets = load_all_presets()
+    if show_all:
+        return list(presets.keys())
+
+    scores = preset_scores()
+    always, scored = [], []
+    for name in presets:
+        if name in FACTORY_PRESETS:
+            always.append(name)
+            continue
+        score = scores.get(name)
+        if score is None:
+            always.append(name)
+        elif score[0] >= min_score:
+            scored.append((score[0], score[1], name))
+    scored.sort(reverse=True)
+    room = max(limit - len(always), 0)
+    return always + [name for _, _, name in scored[:room]]
+
+
+def refresh_preset_list(show_all=False, current=None):
+    choices = visible_preset_choices(show_all)
+    if current and current not in choices:
+        choices = [current] + choices
+    return gr.update(choices=choices)
+
+
+def preset_score_markdown():
+    scores = preset_scores()
+    if not scores:
+        return "*No rated renders yet — rate some tracks and the presets rank themselves.*"
+    rows = sorted(scores.items(), key=lambda kv: (-kv[1][0], kv[0]))
+    lines = ["| Preset | Mean | Rated renders |", "|---|---|---|"]
+    for name, (mean, count) in rows:
+        lines.append(f"| {name} | {mean:.1f} | {count} |")
+    return "\n".join(lines)
+
+
+def format_params_summary(params):
+    """One-line human-readable parameter summary from a track.json parameters block."""
+    if not params:
+        return ""
+    legacy = {
+        "vocal_wildness_sem_temp": "Vocal Wildness",
+        "harmonic_exploration_score_temp": "Harmonic Exploration",
+        "semantic_top_p": "Semantic Top-P",
+        "score_top_p": "Score Top-P",
+        "repetition_penalty": "Repetition Penalty",
+        "semantic_repetition_penalty": "Vocal Repetition",
+        "score_repetition_penalty": "Score Repetition",
+    }
+    bits = [f"{PARAM_LABELS[k]}: {params[k]}" for k in PARAM_KEYS if k in params]
+    bits += [f"{label}: {params[key]}" for key, label in legacy.items() if key in params]
+    return " · ".join(bits)
+
+
+def update_folder_preview(custom_title, lyrics_text, preset_name="", params=None, append_tag=True):
+    """Preview of the folder this render will write. HHMMSS is filled in at render time."""
+    song_id = sanitize_song_id(custom_title) or sanitize_song_id(extract_lyric_keywords(lyrics_text)) or "YuE_Track"
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    tag = build_param_delta_tag(preset_name, params) if append_tag else ""
+    suffix = f"_{tag}" if tag else ""
+    note = ("Only settings that differ from the preset are tagged. "
+            "Full parameters live in the folder's track.json and in the FLAC tags.")
+    return (f"📁 **Resulting Folder:** `{today}_HHMMSS_{song_id}{suffix}`  \n"
+            f"<span style='opacity:0.65'>{note}</span>")
+
+
+def refresh_studio_state(custom_title, preset_name, style, lyrics, append_tag, *params):
+    """
+    One listener per field: refresh the folder preview and the save-state button.
+    `params` arrive in PARAM_SPEC order.
+    """
+    as_dict = dict(zip(PARAM_KEYS, params))
+    preview = update_folder_preview(custom_title, lyrics, preset_name, as_dict, append_tag)
+    btn = save_button_state(preset_name, style, lyrics, custom_title, *params)
+    return preview, btn
+
+
+def synthesize_audio_step(style, lyrics, abc_text, seed, ode_steps,
+                          sem_temp, sem_top_p, rep_pen, cfg_scale, track_title,
+                          preset_name="",
+                          score_temp=0.75, score_top_p=0.90,
+                          score_rep_pen=SCORE_REP_PEN_DEFAULT,
+                          sem_top_k=100, sem_pen_win=50,
+                          sem_min_tokens=200, sem_max_tokens=9000,
+                          score_top_k=30, score_pen_win=100, cot_mode="full",
+                          append_tag=True, audio_format=DEFAULT_AUDIO_FORMAT,
+                          progress=gr.Progress()):
+    _CANCEL["stop"] = False
+    progress(0.02, desc="Preparing pipeline...")
+    pipe = get_pipeline()
+
+    ode_steps = int(ode_steps) if ode_steps is not None else 16
+    sem_temp = float(sem_temp) if sem_temp is not None else 1.15
+    sem_top_p = float(sem_top_p) if sem_top_p is not None else 0.95
+    rep_pen = float(rep_pen) if rep_pen is not None else SEM_REP_PEN_DEFAULT
+    cfg_scale = float(cfg_scale) if cfg_scale is not None else 1.0
+    seed = int(seed) if seed is not None else 404
+    score_temp = float(score_temp) if score_temp is not None else 0.75
+    score_top_p = float(score_top_p) if score_top_p is not None else 0.90
+
+    pipe.generation_config = dataclasses.replace(
+        pipe.generation_config,
+        ode_steps=ode_steps
+    )
+
+    request = {
+        "style": (style or "").strip(),
+        "lyrics": (lyrics or "").strip(),
+        "cot": (cot_mode or "full").strip() or "full",
+        "seed": seed,
+        "abc": abc_text.strip() if abc_text and abc_text.strip() else None,
+        "cfg_scale": cfg_scale,
+        "abc_sampling": {
+            "temperature": float(score_temp),
+            "top_p": float(score_top_p),
+            "repetition_penalty": float(score_rep_pen),
+            "top_k": int(score_top_k),
+            "penalty_window": int(score_pen_win),
+        },
+        "semantic_sampling": {
+            "temperature": sem_temp,
+            "top_p": sem_top_p,
+            "repetition_penalty": rep_pen,
+            "top_k": int(sem_top_k),
+            "penalty_window": int(sem_pen_win),
+            "min_tokens": int(sem_min_tokens),
+            "max_tokens": int(sem_max_tokens),
+        }
+    }
+
+    eff_preset = (preset_name or "").strip()
+    params_now = {
+        "score_temp": score_temp, "score_top_p": score_top_p,
+        "score_rep_pen": score_rep_pen, "score_top_k": score_top_k,
+        "score_pen_win": score_pen_win,
+        "sem_temp": sem_temp, "sem_top_p": sem_top_p, "rep_pen": rep_pen,
+        "sem_top_k": sem_top_k, "sem_pen_win": sem_pen_win,
+        "sem_min_tokens": sem_min_tokens, "sem_max_tokens": sem_max_tokens,
+        "cfg_scale": cfg_scale, "flow_steps": ode_steps, "seed": seed,
+        "cot_mode": cot_mode,
+    }
+    # Sortable timestamped folder, tagged with whatever differs from the preset.
+    tag = build_param_delta_tag(eff_preset, params_now) if append_tag else ""
+    folder_name = build_track_folder_name(track_title, lyrics, tag=tag)
+    output_dir = Path("outputs") / folder_name
+    suffix = 2
+    while output_dir.exists():
+        output_dir = Path("outputs") / f"{folder_name}-{suffix}"
+        suffix += 1
+    folder_name = output_dir.name
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    progress(0.15, desc=f"🎶 Generating song ({ode_steps} flow steps)...")
+    start = time.perf_counter()
+
+    on_token, cancelled = make_progress_hooks(
+        progress, 0.15, 0.80, 4000, "🎶 Generating song", audio_stage=True
+    )
+    try:
+        song = pipe(**request, cancelled=cancelled, on_token=on_token)
+        progress(0.98, desc="💾 Writing audio & artifacts...")
+        song.save_artifacts(output_dir)
+    except InterruptedError:
+        try:
+            output_dir.rmdir()
+        except OSError:
+            pass
+        return None, "🛑 Generation cancelled.", ""
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return None, f"⚠️ Synthesis failed: {exc}", ""
+
+    # A second name for the same audio. save_artifacts() writes audio.flac and
+    # records its hash in result.json, so that file has to stay. A hard link gives
+    # the track its readable name without a second 40MB copy on disk.
+    named_flac = output_dir / f"{folder_name}.flac"
+    default_flac = output_dir / "audio.flac"
+    if default_flac.exists() and not named_flac.exists():
+        try:
+            os.link(default_flac, named_flac)
+        except OSError:
+            import shutil
+            shutil.copy2(default_flac, named_flac)
+
+    elapsed = time.perf_counter() - start
+    audio_seconds = len(song.audio) / 48000
+    progress(0.99, desc="🗜️ Writing archive format...")
+    converted, fmt_note = apply_audio_format(output_dir, folder_name, audio_format)
+    audio_path = converted or str(named_flac if named_flac.exists() else default_flac)
+
+    write_track_metadata(
+        output_dir, folder_name, track_title, eff_preset, style, lyrics, params_now,
+        audio_path=audio_path, elapsed=elapsed, audio_seconds=audio_seconds
+    )
+
+    status_msg = (f"🎉 Rendered in {elapsed:.1f}s | Length: {audio_seconds:.1f}s | "
+                  f"`{Path(audio_path).name}` | {fmt_note}")
+    return audio_path, status_msg, folder_name
+
+
+def one_click_generate_step(style, lyrics, custom_title,
+                            score_temp, score_top_p, score_rep_pen, score_top_k, score_pen_win,
+                            sem_temp, sem_top_p, rep_pen, sem_top_k, sem_pen_win,
+                            sem_min_tokens, sem_max_tokens,
+                            cfg_scale, flow_steps, seed, cot_mode,
+                            append_tag=True, audio_format=DEFAULT_AUDIO_FORMAT, preset_name="",
+                            progress=gr.Progress()):
+    """Plan ABC score and synthesize audio in a single flow."""
+    abc_text, metrics, plan_msg = generate_plan_step(
+        style, lyrics, seed, score_temp, score_top_p, score_rep_pen,
+        score_top_k=score_top_k, score_pen_win=score_pen_win, cot_mode=cot_mode,
+        progress=progress
+    )
+    if plan_msg.startswith("🛑"):
+        return None, abc_text, metrics, plan_msg, ""
+
+    audio_path, synth_msg, folder_name = synthesize_audio_step(
+        style, lyrics, abc_text, seed, flow_steps,
+        sem_temp, sem_top_p, rep_pen, cfg_scale, custom_title,
+        preset_name=preset_name,
+        score_temp=score_temp, score_top_p=score_top_p, score_rep_pen=score_rep_pen,
+        sem_top_k=sem_top_k, sem_pen_win=sem_pen_win,
+        sem_min_tokens=sem_min_tokens, sem_max_tokens=sem_max_tokens,
+        score_top_k=score_top_k, score_pen_win=score_pen_win, cot_mode=cot_mode,
+        append_tag=append_tag, audio_format=audio_format,
+        progress=progress
+    )
+    total_msg = f"{plan_msg} | {synth_msg}"
+    return audio_path, abc_text, metrics, total_msg, folder_name
+
+
+# ==================== TRACK LIBRARY & MANAGEMENT ====================
+
+def get_track_data():
+    """Retrieve full details of all rendered tracks."""
+    outputs_dir = Path("outputs")
+    if not outputs_dir.exists():
+        return []
+
+    tracks = []
+    # favorites_page holds the generated website, not a render
+    skip = {"favorites_page", "FAVS"}
+    for d in sorted(outputs_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if d.is_dir() and d.name not in skip:
+            # Playable audio: the named MP3, else a named FLAC, else audio.flac
+            flac = next(iter(sorted(d.glob("*.mp3"))), None)
+            if flac is None:
+                for f in d.glob("*.flac"):
+                    if f.name != "audio.flac":
+                        flac = f
+                        break
+            if not flac and (d / "audio.flac").exists():
+                flac = d / "audio.flac"
+
+            score_file = d / "score.abc"
+            req_file = d / "request.json"
+            res_file = d / "result.json"
+
+            # Parse audio duration
+            duration = "-"
+            if flac and flac.exists():
+                try:
+                    import soundfile as sf
+                    secs = sf.info(str(flac)).duration
+                    duration = f"{int(secs // 60)}m {int(secs % 60):02d}s"
+                except Exception:
+                    pass
+            elif res_file.exists():
+                try:
+                    res = json.loads(res_file.read_text())
+                    secs = res.get("audio_seconds", 0)
+                    duration = f"{int(secs // 60)}m {int(secs % 60):02d}s"
+                except Exception:
+                    pass
+
+            # Parse key/bpm
+            key_bpm = "-"
+            score_text = ""
+            if score_file.exists():
+                score_text = score_file.read_text(encoding="utf-8", errors="ignore")
+                key_m = re.search(r"K:([A-G][b#]?[m]?)", score_text)
+                tempo_m = re.search(r"Q:(?:1/4=)?(\d+)", score_text)
+                k = key_m.group(1) if key_m else "?"
+                t = tempo_m.group(1) if tempo_m else "?"
+                key_bpm = f"{k} · {t} BPM"
+
+            # Parse style & lyrics
+            style_prompt = ""
+            lyrics_text = ""
+            if req_file.exists():
+                try:
+                    req = json.loads(req_file.read_text())
+                    style_prompt = req.get("style", "")
+                    lyrics_text = req.get("lyrics", "")
+                except Exception:
+                    pass
+
+            # Parameters, preset and the star travel with the track in track.json
+            meta = read_track_metadata(d)
+            params_summary = format_params_summary(meta.get("parameters", {}))
+            preset_used = meta.get("preset", "")
+            track_rating = rating_of(meta)
+            is_favorite = track_rating is not None and track_rating >= FAVORITE_THRESHOLD
+            style_prompt = style_prompt or meta.get("style", "")
+            lyrics_text = lyrics_text or meta.get("lyrics", "")
+
+            folder_bytes = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+            size_str = f"{folder_bytes / (1024 * 1024):.1f} MB" if (flac and flac.exists()) else "Plan Only"
+            mtime = datetime.datetime.fromtimestamp(d.stat().st_mtime).strftime("%b %d, %H:%M")
+
+            tracks.append({
+                "name": d.name,
+                "audio": str(flac) if (flac and flac.exists()) else None,
+                "score": score_text,
+                "duration": duration,
+                "key_bpm": key_bpm,
+                "size": size_str,
+                "date": mtime,
+                "style": style_prompt,
+                "lyrics": lyrics_text,
+                "params": params_summary,
+                "preset": preset_used,
+                "favorite": is_favorite,
+                "rating": track_rating,
+                "path": str(d.resolve())
+            })
+    return tracks
+
+
+def filter_by_rating(tracks, min_rating_label):
+    """`min_rating_label` is one of FILTER_CHOICES."""
+    if not min_rating_label or min_rating_label == "all":
+        return tracks
+    if min_rating_label == "unrated":
+        return [t for t in tracks if t.get("rating") is None]
+    floor = label_to_rating(min_rating_label)
+    if floor is None:
+        return tracks
+    return [t for t in tracks if t.get("rating") is not None and t["rating"] >= floor]
+
+
+def get_track_table(min_rating_label="all"):
+    """Format track table for Gradio Dataframe."""
+    tracks = filter_by_rating(get_track_data(), min_rating_label)
+    return [
+        [rating_stars(t.get("rating")), t["name"], t["duration"], t["key_bpm"], t["size"], t["date"]]
+        for t in tracks
+    ]
+
+
+def select_track_by_name(name):
+    """Load audio and details for selected track."""
+    if not name:
+        return None, "", "", "", "", "", "No track selected"
+
+    base = Path("outputs") / name
+    playable = next(iter(sorted(base.glob("*.mp3"))), None)
+    if playable is None:
+        for f in base.glob("*.flac"):
+            if f.name != "audio.flac":
+                playable = f
+                break
+    if playable is None and (base / "audio.flac").exists():
+        playable = base / "audio.flac"
+    flac = str(playable) if playable else None
+
+    score_file = base / "score.abc"
+    score_text = score_file.read_text(encoding="utf-8", errors="ignore") if score_file.exists() else ""
+
+    style = ""
+    lyrics = ""
+    req_file = base / "request.json"
+    if req_file.exists():
+        try:
+            req = json.loads(req_file.read_text())
+            style = req.get("style", "")
+            lyrics = req.get("lyrics", "")
+        except Exception:
+            pass
+
+    params_line = ""
+    meta_file = base / "track.json"
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            summary = format_params_summary(meta.get("parameters", {}))
+            preset_used = meta.get("preset", "")
+            style = style or meta.get("style", "")
+            lyrics = lyrics or meta.get("lyrics", "")
+            parts = []
+            if preset_used:
+                parts.append(f"**Preset:** {preset_used}")
+            if summary:
+                parts.append(summary)
+            params_line = "  \n".join(parts)
+        except Exception:
+            pass
+    if not params_line:
+        params_line = "*No track.json — rendered before parameters were stored with the track.*"
+
+    metrics = parse_abc_metrics(score_text)
+    status = f"Loaded `{name}` | Directory: `{base.resolve()}`"
+    return flac, score_text, metrics, params_line, style, lyrics, status
+
+
+def rename_track_action(old_name, new_name):
+    """Rename a track folder in outputs/."""
+    if not old_name or not new_name:
+        return gr.update(), gr.update(), "⚠️ Please select a track and enter a new name."
+
+    old_dir = Path("outputs") / old_name
+    clean_new_name = re.sub(r'[\\/\0<>|?*"]', "_", new_name.strip())
+    new_dir = Path("outputs") / clean_new_name
+
+    if not old_dir.exists():
+        return gr.update(), gr.update(), f"❌ Track '{old_name}' not found."
+    if new_dir.exists() and clean_new_name != old_name:
+        return gr.update(), gr.update(), f"❌ A track named '{clean_new_name}' already exists."
+
+    try:
+        old_dir.rename(new_dir)
+        old_named_flac = new_dir / f"{old_name}.flac"
+        new_named_flac = new_dir / f"{clean_new_name}.flac"
+        if old_named_flac.exists() and not new_named_flac.exists():
+            old_named_flac.rename(new_named_flac)
+
+        tracks = get_track_data()
+        choices = [t["name"] for t in tracks]
+        table_data = get_track_table()
+        return (
+            gr.update(choices=choices, value=clean_new_name),
+            gr.update(value=table_data),
+            f"✅ Successfully renamed `{old_name}` to `{clean_new_name}`!"
+        )
+    except Exception as e:
+        return gr.update(), gr.update(), f"❌ Error renaming: {str(e)}"
+
+
+def reveal_in_finder_action(track_name):
+    """Reveal track directory in macOS Finder."""
+    if not track_name:
+        return "⚠️ No track selected."
+    path = (Path("outputs") / track_name).resolve()
+    if path.exists():
+        subprocess.run(["open", str(path)])
+        return f"📂 Opened `{track_name}` in macOS Finder."
+    return f"❌ Path not found: {path}"
+
+
+def play_in_system_action(track_name):
+    """Launch audio file in default macOS media player (QuickTime / Music)."""
+    if not track_name:
+        return "⚠️ Please select a track first."
+    base = Path("outputs") / track_name
+    flac = None
+    for f in base.glob("*.flac"):
+        if f.name != "audio.flac":
+            flac = f
+            break
+    if not flac and (base / "audio.flac").exists():
+        flac = base / "audio.flac"
+
+    if flac and flac.exists():
+        subprocess.run(["open", str(flac.resolve())])
+        return f"🔊 Opened `{flac.name}` in macOS System Player."
+    return f"❌ No audio FLAC found in `{track_name}`."
+
+
+def delete_track_action(track_name):
+    """Safely delete a track directory in outputs/."""
+    noop = tuple(gr.update() for _ in range(8))
+
+    if not track_name:
+        return noop + ("⚠️ Please select a track to delete.",)
+
+    outputs_dir = Path("outputs").resolve()
+    target_dir = (outputs_dir / track_name).resolve()
+
+    if target_dir == outputs_dir or outputs_dir not in target_dir.parents:
+        return noop + (f"❌ Illegal path: {track_name}",)
+
+    if not target_dir.exists():
+        return noop + (f"❌ Track '{track_name}' not found.",)
+
+    try:
+        import shutil
+        shutil.rmtree(target_dir)
+        tracks = get_track_data()
+        choices = [t["name"] for t in tracks]
+        table_data = get_track_table()
+        first = choices[0] if choices else None
+        audio, score, metrics, params_line, style, lyrics, _st = select_track_by_name(first)
+        return (
+            gr.update(choices=choices, value=first),
+            gr.update(value=table_data),
+            audio, score, metrics, params_line, style, lyrics,
+            f"🗑️ Deleted track folder `{track_name}`."
+        )
+    except Exception as e:
+        return noop + (f"❌ Error deleting track: {str(e)}",)
+
+
+
+# ==================== TOOLTIP LAYER ====================
+# One tooltip element on <body> positioned by JS: Gradio's blocks clip their own
+# overflow, so a CSS-only tooltip anchored inside a slider gets cut off.
+TOOLTIPS = {
+    "tip-score-temp": "ABC temperature. Low (0.4-0.6): conventional diatonic progressions, "
+                      "predictable phrasing. High (1.0+): borrowed chords, modal mixture, "
+                      "irregular bar counts. Above ~1.3 the notation starts malforming. "
+                      "Library default 0.7.",
+    "tip-score-top-p": "Nucleus sampling on the score. Low (0.7-0.8) keeps only the likeliest "
+                       "notes and cancels out a high temperature. High (0.95-1.0) admits rare "
+                       "chord qualities. Library default 0.9.",
+    "tip-score-rep": "Repetition penalty on the notation. Keep near 1.005: repetition is "
+                     "structural in music, and a codec-strength penalty here produces scores "
+                     "that never restate a theme or resolve.",
+    "tip-sem-temp": "Codec temperature — delivery, not melody. Low (0.8-0.95): steady pitch, "
+                    "literal reading of the style prompt. High (1.2-1.4): unstable pitch, ad-lib, "
+                    "timbre drift. Above ~1.5: dropped words. This is the control that costs "
+                    "legibility — raise Score Top-K instead for melodic variety.",
+    "tip-sem-top-p": "Nucleus sampling on the audio stage. Drop to 0.9 before dropping "
+                     "temperature: it removes the improbable tail without flattening what "
+                     "remains. Library default 0.95.",
+    "tip-sem-rep": "Repetition penalty on the codec stream. At 1.0 the model can lock into a "
+                   "loop. Above ~1.3 it refuses to reuse material, so choruses stop sounding "
+                   "like the same chorus. Library default 1.2.",
+    "tip-flow": "ODE solve steps. No effect on composition — the notes and the performance are "
+                "already fixed by the time this runs. Default 12 renders a fast preview; the "
+                "Library's Re-solve button upgrades a keeper to 32 without re-running generation.",
+    "tip-cfg": "Classifier-free guidance. 1.0 means OFF — one forward pass. Any other value "
+               "runs a second negative-conditioned pass: stronger genre adherence, roughly "
+               "double the time for the audio stage, and double the tensor width through the "
+               "attention kernel that aborts under MPS.",
+    "tip-seed": "Fix it when comparing parameters, or you cannot tell a parameter effect from "
+                "sampling variance. Change it to reroll identical settings.",
+    "tip-score-topk": "How many note candidates survive before Top-P. Raising 30 to 60-90 "
+                      "widens melodic choice WITHOUT flattening the distribution — more varied "
+                      "melody at far less cost to legibility than raising temperature. "
+                      "Library default 30.",
+    "tip-sem-topk": "Candidate pool for the audio stage. Lowering 100 to ~50 tightens diction "
+                    "and consonant clarity. Raise it only alongside a lower temperature.",
+    "tip-score-win": "How many recent tokens the score repetition penalty looks back over. "
+                     "Shorter windows permit long-range restatement while still discouraging "
+                     "immediate stutter. Library default 100.",
+    "tip-sem-win": "Lookback for the vocal repetition penalty. A longer window discourages "
+                   "reusing phrases across a wider span; a shorter one only blocks immediate "
+                   "loops. Library default 50.",
+    "tip-minlen": "The end token is forbidden until this many tokens have been generated — "
+                  "a floor on song length. Library default 200.",
+    "tip-maxlen": "Token ceiling for the audio stage, so the effective maximum song length. "
+                  "Library default 9000. Prefix plus this must stay under the 24576 context.",
+    "tip-cot": "full: chord-annotated score, then audio. melody: melody-only score, no chord "
+               "symbols — looser harmonic commitment. off: no score at all, straight to audio "
+               "(the Sheet Music tab stays empty).",
+    "tip-favs-only": "Minimum rating for the list, the table and the ⏮/⏭ playlist. "
+                     "\"unrated\" shows only what you have not judged yet — the queue to work through.",
+    "tip-rating": "0-5. Absent is not zero: leaving a track unrated means unjudged, and the "
+                  "analysis excludes it. A 0 means you listened and rejected it, which is real "
+                  "evidence. 4 or more counts as a favorite for the playlist and the page.",
+    "tip-rating-lib": "0-5. Absent is not zero: unrated means unjudged and is excluded from the "
+                      "analysis; 0 means listened to and rejected. 4+ counts as a favorite.",
+    "tip-show-all-presets": "Off: factory presets, presets with no rated renders, and the best 25 "
+                            "scoring 3.0 or higher. On: every preset in the file.",
+    "tip-migrate": "Converts pre-rating stars to rating 4. Tracks that were never starred stay "
+                   "UNRATED rather than becoming 0 — they were never judged, and recording them "
+                   "as rejections would invent data.",
+    "tip-append-tag": "Appends a short code for every setting that differs from the preset "
+                      "baseline, e.g. [vw1.35_stk80]. Renders of one song at different values "
+                      "stay distinguishable in Finder without the old 120-character names.",
+    "tip-build-page": "Writes outputs/favorites_page/index.html with a player per starred "
+                      "track, a fold-out parameter table and your notes. Audio is converted to "
+                      "MP3 beside it, so the folder can be moved or uploaded whole. Rebuilding "
+                      "preserves any intro text you edited into the page.",
+    "tip-audio-format": "The pipeline writes 24-bit FLAC at about 11 MB per minute. "
+                        "latent.npy is 0.4 MB per minute and the VAE decode is deterministic, "
+                        "so MP3 + latents is a complete archive: the lossless master regenerates "
+                        "exactly, in seconds, from Rebuild lossless in the Library.",
+    "tip-prev": "Previous track in the list currently on screen — the favorites filter "
+                "narrows the playlist as well as the table.",
+    "tip-next": "Next track in the list currently on screen.",
+    "tip-autoplay": "When a track finishes, load and play the next one.",
+    "tip-star-report": "Rebuilds the comparison from every track.json on disk.",
+    "tip-save-favs-preset": "Writes a preset named FAVS-<date> from the median of every "
+                            "starred track's settings. A starting point, not a verdict.",
+    "tip-upgrade": "Re-runs ONLY the flow solve, using the semantic tokens already on disk — the "
+                   "autoregressive stage is skipped. Cost scales with audio LENGTH as well as step "
+                   "count: on a 9000-token track the solve runs about 21s per step, so 32 steps is "
+                   "roughly 11 minutes. On a short track it is under a minute.",
+    "tip-upgrade-steps": "Flow steps for the re-solve. 32 is the library default and the cleanest "
+                         "decode; the cost is roughly linear in this number.",
+    "tip-redecode": "Rebuilds the 24-bit FLAC from latent.npy. VAE decode only — no regeneration, "
+                    "no sampling, bit-identical to the original master.",
+    "tip-display-name": "The name a listener sees. Used for the heading on the playlist page "
+                        "and for the audio filename there — \"iridescent scaling\" becomes "
+                        "audio/iridescent-scaling.mp3. The render folder keeps its own name.",
+    "tip-notes": "Accompanying text for this track. Saved into its track.json and rendered "
+                 "under the track on the playlist page.",
+    "tip-export-favs": "Write outputs/favorites.json — every starred track with its audio path, "
+                       "prompt, lyrics and parameters. This is the input for the favorites page.",
+    "tip-stop": "Sets the flag the pipeline polls between tokens. Generation stops at the next "
+                "token and the half-written folder is removed.",
+    "tip-save": "Green means the current settings are already stored under this preset name. "
+                "Blue means there is something unsaved.",
+}
+
+TOOLTIP_SCRIPT = """
+<script>
+window.YUE_TIPS = __TIPS_JSON__;
+(function () {
+  function init() {
+    if (!document.body) { setTimeout(init, 60); return; }
+    var tip = document.getElementById('yue-tip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'yue-tip';
+      document.body.appendChild(tip);
+    }
+    function place(e) {
+      var x = e.clientX + 16, y = e.clientY + 20;
+      var w = tip.offsetWidth, h = tip.offsetHeight;
+      if (x + w > window.innerWidth - 12) x = window.innerWidth - w - 12;
+      if (y + h > window.innerHeight - 12) y = e.clientY - h - 14;
+      tip.style.left = x + 'px';
+      tip.style.top = y + 'px';
+    }
+    function targetOf(el) {
+      // Bind to the parameter NAME only. Binding to the whole block means the
+      // tooltip sits over the control while you are dragging its slider.
+      if (el.tagName === 'BUTTON') return el;
+      var label = el.querySelector('span[data-testid="block-info"]')
+               || el.querySelector('label > span')
+               || el.querySelector('label')
+               || el.querySelector('button');
+      return label || el;
+    }
+    function bind() {
+      Object.keys(window.YUE_TIPS).forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        var t = targetOf(el);
+        if (!t || t.dataset.yueTipBound) return;
+        t.dataset.yueTipBound = '1';
+        t.classList.add('yue-tip-target');
+        var text = window.YUE_TIPS[id];
+        t.addEventListener('mouseenter', function (e) {
+          tip.textContent = text;
+          tip.classList.add('on');
+          place(e);
+        });
+        t.addEventListener('mousemove', place);
+        t.addEventListener('mouseleave', function () { tip.classList.remove('on'); });
+      });
+    }
+    bind();
+    new MutationObserver(bind).observe(document.body, { childList: true, subtree: true });
+  }
+  init();
+})();
+</script>
+"""
+
+# Load local abcjs library for sheet music visualization
+ABCJS_PATH = Path("assets/abcjs-basic-min.js")
+ABCJS_CODE = ABCJS_PATH.read_text(encoding="utf-8") if ABCJS_PATH.exists() else ""
+
+HEAD_SCRIPTS = f"""
+<script>
+{ABCJS_CODE}
+window.renderSheetMusic = function(abc) {{
+    if (!abc || !abc.trim()) return;
+    var container = document.getElementById("sheet-music-paper");
+    if (!container) return;
+    if (window.ABCJS) {{
+        ABCJS.renderAbc("sheet-music-paper", abc, {{
+            responsive: "resize",
+            scale: 0.95,
+            add_classes: true,
+            staffwidth: 720
+        }});
+    }}
+}};
+
+window.toggleTheme = function() {{
+    var isDark = document.documentElement.classList.contains('dark') ||
+                 document.body.classList.contains('dark') ||
+                 (document.querySelector('gradio-app') && document.querySelector('gradio-app').classList.contains('dark'));
+    window.setAppTheme(isDark ? 'light' : 'dark');
+}};
+
+window.setAppTheme = function(theme) {{
+    var btn = document.getElementById('theme-toggle-btn');
+    var gApp = document.querySelector('gradio-app');
+    if (theme === 'dark') {{
+        document.documentElement.classList.add('dark');
+        document.body.classList.add('dark');
+        if (gApp) gApp.classList.add('dark');
+        if (btn) btn.innerHTML = '☀️ Light Mode';
+        localStorage.setItem('yue2_theme', 'dark');
+    }} else {{
+        document.documentElement.classList.remove('dark');
+        document.body.classList.remove('dark');
+        if (gApp) gApp.classList.remove('dark');
+        if (btn) btn.innerHTML = '🌙 Dark Mode';
+        localStorage.setItem('yue2_theme', 'light');
+    }}
+}};
+
+window.initTheme = function() {{
+    var saved = localStorage.getItem('yue2_theme') || 'light';
+    window.setAppTheme(saved);
+}};
+
+document.addEventListener('DOMContentLoaded', window.initTheme);
+window.addEventListener('load', window.initTheme);
+setTimeout(window.initTheme, 250);
+setTimeout(window.initTheme, 1000);
+</script>
+""" + """
+<style>
+.input-with-btn .finder-btn,
+button.finder-btn,
+.toolbar-btn.finder-btn {
+    background: #f4f4f5 !important;
+    background-color: #f4f4f5 !important;
+    border: 1px solid #d4d4d8 !important;
+    color: #18181b !important;
+}
+.input-with-btn .finder-btn:hover,
+button.finder-btn:hover,
+.toolbar-btn.finder-btn:hover {
+    background: #e4e4e7 !important;
+    background-color: #e4e4e7 !important;
+}
+.input-with-btn .rename-btn,
+button.rename-btn,
+.toolbar-btn.rename-btn {
+    background: #2563eb !important;
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+    background-color: #2563eb !important;
+    border: 1px solid #1d4ed8 !important;
+    color: #ffffff !important;
+}
+.input-with-btn .rename-btn:hover,
+button.rename-btn:hover,
+.toolbar-btn.rename-btn:hover {
+    background: #1d4ed8 !important;
+    background-color: #1d4ed8 !important;
+}
+
+.dark .input-with-btn .finder-btn,
+.dark button.finder-btn,
+.dark .toolbar-btn.finder-btn,
+body.dark .input-with-btn .finder-btn,
+body.dark button.finder-btn,
+body.dark .toolbar-btn.finder-btn {
+    background: rgba(255, 255, 255, 0.08) !important;
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    color: #f4f4f5 !important;
+}
+.dark .input-with-btn .rename-btn,
+.dark button.rename-btn,
+.dark .toolbar-btn.rename-btn,
+body.dark .input-with-btn .rename-btn,
+body.dark button.rename-btn,
+body.dark .toolbar-btn.rename-btn {
+    background: #3b82f6 !important;
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+    background-color: #3b82f6 !important;
+    border: 1px solid #2563eb !important;
+    color: #ffffff !important;
+}
+
+/* Single-Row Preset & Variation Toolbar: Dropdowns fill full horizontal space without line wrapping */
+.preset-toolbar-single-row,
+div.preset-toolbar-single-row {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    gap: 16px !important;
+    width: 100% !important;
+    margin-bottom: 6px !important;
+    padding: 2px 0 !important;
+    position: relative !important;
+}
+
+.preset-group,
+.variation-group,
+div.preset-group,
+div.variation-group {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    gap: 6px !important;
+    flex: 1 1 0% !important;
+    min-width: 0 !important;
+    width: calc(50% - 8px) !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+.preset-group > .toolbar-label,
+.variation-group > .toolbar-label,
+div.toolbar-label {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    white-space: nowrap !important;
+}
+.toolbar-label p, .toolbar-label strong {
+    margin: 0 !important;
+    white-space: nowrap !important;
+}
+
+.preset-group > .compact-dropdown,
+.variation-group > .compact-dropdown,
+.preset-group > .form,
+.variation-group > .form,
+.compact-dropdown {
+    flex: 1 1 0% !important;
+    width: auto !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+.compact-dropdown .wrap,
+.compact-dropdown .wrap-inner,
+.compact-dropdown input,
+.compact-dropdown .secondary-wrap,
+.compact-dropdown .container {
+    min-height: 36px !important;
+    height: 36px !important;
+    font-size: 0.85rem !important;
+    margin: 0 !important;
+    padding-top: 1px !important;
+    padding-bottom: 1px !important;
+    width: 100% !important;
+}
+
+.preset-group > .toolbar-btn,
+.variation-group > .toolbar-btn,
+.toolbar-btn {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    max-height: 36px !important;
+    margin: 0 !important;
+    padding: 0 10px !important;
+    font-size: 0.85rem !important;
+    font-weight: 600 !important;
+    letter-spacing: normal !important;
+    border-radius: 7px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    white-space: nowrap !important;
+    cursor: pointer !important;
+    box-sizing: border-box !important;
+    line-height: 1 !important;
+}
+</style>
+"""
+
+HEAD_SCRIPTS += TOOLTIP_SCRIPT.replace(
+    "__TIPS_JSON__", json.dumps(TOOLTIPS, ensure_ascii=False)
+)
+
+# Custom CSS for light/dark themes, high-contrast tab titles, and visual sheet music
+CUSTOM_CSS = """
+:root {
+    --bg-gradient: linear-gradient(180deg, #fafafa 0%, #f4f4f5 100%);
+    --body-bg: #fafafa;
+    --text-main: #09090b;
+    --text-muted: #52525b;
+    --header-title: #09090b;
+    --badge-bg: #f4f4f5;
+    --badge-border: #d4d4d8;
+    --badge-color: #18181b;
+    --tab-inactive-text: #52525b;
+    --tab-inactive-bg: #e4e4e7;
+    --tab-active-text: #09090b;
+    --tab-active-bg: #ffffff;
+    --finder-btn-bg: #f4f4f5;
+    --finder-btn-text: #09090b;
+    --finder-btn-border: #d4d4d8;
+    --paper-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+.dark {
+    --bg-gradient: radial-gradient(circle at 50% 0%, #171923 0%, #0d0f17 100%);
+    --body-bg: #0d0f17;
+    --text-main: #f8fafc;
+    --text-muted: #94a3b8;
+    --header-title: linear-gradient(135deg, #c084fc 0%, #60a5fa 100%);
+    --badge-bg: rgba(139, 92, 246, 0.15);
+    --badge-border: rgba(139, 92, 246, 0.35);
+    --badge-color: #c084fc;
+    --tab-inactive-text: #94a3b8;
+    --tab-inactive-bg: #1e293b;
+    --tab-active-text: #c084fc;
+    --tab-active-bg: #0f172a;
+    --finder-btn-bg: rgba(255, 255, 255, 0.08);
+    --finder-btn-text: #e2e8f0;
+    --finder-btn-border: rgba(255, 255, 255, 0.15);
+    --paper-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+body, .gradio-container {
+    background: var(--bg-gradient) !important;
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: var(--text-main) !important;
+    max-width: 1480px !important;
+    margin: 0 auto !important;
+    transition: background 0.3s ease, color 0.3s ease;
+}
+
+/* Monochrome light mode core typography */
+body:not(.dark) label,
+body:not(.dark) .field-header-label,
+body:not(.dark) .field-header-label strong,
+body:not(.dark) .gr-form label,
+body:not(.dark) .block-title,
+body:not(.dark) span[data-testid="block-info"],
+body:not(.dark) h1, body:not(.dark) h2, body:not(.dark) h3, body:not(.dark) h4 {
+    color: #09090b !important;
+    font-weight: 700 !important;
+}
+
+body:not(.dark) .header-badge {
+    background: #f4f4f5 !important;
+    border: 1px solid #d4d4d8 !important;
+    color: #18181b !important;
+}
+
+body:not(.dark) .theme-toggle-btn {
+    background: #ffffff !important;
+    border: 1px solid #d4d4d8 !important;
+    color: #18181b !important;
+}
+body:not(.dark) .theme-toggle-btn:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
+}
+
+/* ==================== HIGH CONTRAST ALWAYS-VISIBLE TAB HEADERS ==================== */
+.tab-nav, div[role="tablist"] {
+    border-bottom: 2px solid var(--tab-inactive-bg) !important;
+    margin-bottom: 8px !important;
+    gap: 6px !important;
+}
+
+button[role="tab"], .tab-nav button, div[role="tablist"] button {
+    font-size: 0.95rem !important;
+    font-weight: 700 !important;
+    padding: 8px 18px !important;
+    border-radius: 8px 8px 0 0 !important;
+    transition: all 0.2s ease-in-out !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    cursor: pointer !important;
+}
+
+button[role="tab"] span, .tab-nav button span, div[role="tablist"] button span,
+button[role="tab"] p, .tab-nav button p, div[role="tablist"] button p {
+    opacity: 1 !important;
+    visibility: visible !important;
+    font-weight: 700 !important;
+    color: inherit !important;
+    font-size: inherit !important;
+}
+
+button[role="tab"]:not(.selected), .tab-nav button:not(.selected), div[role="tablist"] button:not(.selected) {
+    color: var(--tab-inactive-text) !important;
+    background: var(--tab-inactive-bg) !important;
+    border: 1px solid rgba(148, 163, 184, 0.25) !important;
+    border-bottom: none !important;
+}
+button[role="tab"]:not(.selected) span, .tab-nav button:not(.selected) span {
+    color: var(--tab-inactive-text) !important;
+}
+
+button[role="tab"].selected, .tab-nav button.selected, div[role="tablist"] button.selected {
+    color: var(--tab-active-text) !important;
+    background: var(--tab-active-bg) !important;
+    font-weight: 800 !important;
+    border: 1.5px solid var(--tab-active-text) !important;
+    border-bottom: 2.5px solid var(--tab-active-text) !important;
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.06) !important;
+}
+.dark button[role="tab"].selected, .dark .tab-nav button.selected, .dark div[role="tablist"] button.selected {
+    box-shadow: 0 -2px 10px rgba(124, 58, 237, 0.12) !important;
+}
+button[role="tab"].selected span, .tab-nav button.selected span {
+    color: var(--tab-active-text) !important;
+}
+
+button[role="tab"]:hover, .tab-nav button:hover, div[role="tablist"] button:hover {
+    color: var(--tab-active-text) !important;
+    transform: translateY(-1px);
+}
+button[role="tab"]:hover span, .tab-nav button:hover span {
+    color: var(--tab-active-text) !important;
+}
+
+/* ==================== BADGES & THEME BUTTON ==================== */
+.header-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    background: var(--badge-bg);
+    border: 1px solid var(--badge-border);
+    border-radius: 9999px;
+    color: var(--badge-color);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.theme-toggle-btn {
+    background: var(--badge-bg);
+    color: var(--badge-color);
+    border: 1px solid var(--badge-border);
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.theme-toggle-btn:hover {
+    transform: scale(1.04);
+}
+
+.one-click-btn {
+    background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 50%, #3b82f6 100%) !important;
+    color: white !important;
+    font-weight: 700 !important;
+    font-size: 1.05rem !important;
+    border: none !important;
+    box-shadow: 0 4px 15px rgba(139, 92, 246, 0.35) !important;
+    transition: all 0.2s ease !important;
+}
+.one-click-btn:hover {
+    box-shadow: 0 6px 25px rgba(236, 72, 153, 0.5) !important;
+    transform: translateY(-1px);
+}
+.accent-btn {
+    background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%) !important;
+    color: white !important;
+    border: none !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+}
+.accent-btn:hover {
+    box-shadow: 0 0 20px rgba(124, 58, 237, 0.45) !important;
+    transform: translateY(-1px);
+}
+.draft-btn {
+    background: linear-gradient(135deg, #0d9488 0%, #0891b2 100%) !important;
+    color: white !important;
+}
+.rename-btn {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+    color: white !important;
+    font-weight: 600 !important;
+}
+.finder-btn {
+    background: var(--finder-btn-bg) !important;
+    color: var(--finder-btn-text) !important;
+    border: 1px solid var(--finder-btn-border) !important;
+}
+#sheet-music-paper {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    padding: 18px !important;
+    border-radius: 12px !important;
+    min-height: 480px;
+    max-height: 720px;
+    overflow-y: auto !important;
+    overflow-x: auto !important;
+    box-shadow: var(--paper-shadow);
+    border: 1px solid rgba(0,0,0,0.1);
+}
+#sheet-music-paper svg {
+    max-width: 100% !important;
+    height: auto !important;
+}
+
+/* ==================== FIELD HEADERS & CLOSE-PROXIMITY CHECKBOXES ==================== */
+.field-header-row {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+    flex-wrap: nowrap !important;
+    white-space: nowrap !important;
+    gap: 12px !important;
+    margin-bottom: 3px !important;
+    width: 100% !important;
+}
+
+.field-header-row > div,
+.field-header-row .block,
+.field-header-row .field-header-label,
+.field-header-row .form,
+.field-header-row .gr-checkbox {
+    flex: 0 0 auto !important;
+    flex-grow: 0 !important;
+    flex-shrink: 0 !important;
+    width: auto !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+.field-header-label {
+    font-size: 0.88rem !important;
+    font-weight: 700 !important;
+    color: var(--text-main) !important;
+    margin: 0 !important;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+}
+
+.field-header-label p, .field-header-label strong {
+    margin: 0 !important;
+    white-space: nowrap !important;
+}
+
+/* Ensure checkbox and label sit directly adjacent and never wrap */
+.nowrap-check,
+.nowrap-check label,
+.nowrap-check span,
+.field-header-row .gr-checkbox,
+.field-header-row label {
+    white-space: nowrap !important;
+    word-break: keep-all !important;
+    flex-shrink: 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    margin: 0 !important;
+    cursor: pointer !important;
+}
+.nowrap-check span {
+    font-size: 0.82rem !important;
+    white-space: nowrap !important;
+    color: var(--text-muted) !important;
+}
+
+.folder-preview-card {
+    background: rgba(139, 92, 246, 0.07) !important;
+    border: 1px solid rgba(139, 92, 246, 0.22) !important;
+    border-radius: 7px !important;
+    padding: 5px 9px !important;
+    font-size: 0.78rem !important;
+    line-height: 1.4 !important;
+    color: var(--text-main) !important;
+    margin-top: 4px !important;
+    margin-bottom: 4px !important;
+    word-break: break-word !important;
+}
+.folder-preview-card code {
+    font-size: 0.76rem !important;
+    word-break: break-word !important;
+}
+body:not(.dark) .folder-preview-card {
+    background: #f4f4f5 !important;
+    border: 1px solid #e4e4e7 !important;
+    color: #09090b !important;
+}
+
+/* ==================== SINGLE-ROW COMPACT PRESET & VARIATION TOOLBAR ==================== */
+.preset-toolbar-single-row,
+.preset-toolbar-single-row.gradio-row,
+.preset-group,
+.preset-group.gradio-row,
+.variation-group,
+.variation-group.gradio-row {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+}
+
+.preset-toolbar-single-row {
+    justify-content: space-between !important;
+    gap: 16px !important;
+    margin-bottom: 6px !important;
+    padding: 2px 0 !important;
+    width: 100% !important;
+    position: relative !important;
+}
+
+.preset-toolbar-single-row > div.preset-group,
+.preset-group {
+    gap: 6px !important;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    width: auto !important;
+    max-width: 700px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* Eliminate all excess white space in label containers */
+.toolbar-label,
+.preset-group > .toolbar-label,
+.variation-group > .toolbar-label,
+div.toolbar-label {
+    display: inline-flex !important;
+    align-items: center !important;
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: unset !important;
+    max-width: fit-content !important;
+    margin: 0 2px 0 0 !important;
+    padding: 0 !important;
+    font-size: 0.88rem !important;
+    font-weight: 700 !important;
+    color: var(--text-main) !important;
+    white-space: nowrap !important;
+}
+.toolbar-label p, .toolbar-label strong {
+    margin: 0 !important;
+    white-space: nowrap !important;
+}
+
+/* Dropdowns: Fill all horizontal width between label and button on a single line */
+.compact-dropdown,
+.compact-dropdown.preset-select,
+.compact-dropdown.variation-select,
+.preset-group > .compact-dropdown,
+.variation-group > .compact-dropdown,
+.preset-group > .form,
+.variation-group > .form,
+.preset-group > .block:not(.toolbar-label):not(.toolbar-btn),
+.variation-group > .block:not(.toolbar-label):not(.toolbar-btn) {
+    flex: 1 1 0% !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+.compact-dropdown .wrap,
+.compact-dropdown .wrap-inner,
+.compact-dropdown input,
+.compact-dropdown .secondary-wrap,
+.compact-dropdown .container {
+    min-height: 36px !important;
+    height: 36px !important;
+    font-size: 0.85rem !important;
+    margin: 0 !important;
+    padding-top: 1px !important;
+    padding-bottom: 1px !important;
+    width: 100% !important;
+}
+
+/* Toolbar Buttons: Same font size as dropdowns (0.85rem), reduced margins and snug padding */
+.toolbar-btn,
+button.toolbar-btn,
+.preset-group button,
+.variation-group button,
+.preset-group .toolbar-btn,
+.variation-group .toolbar-btn {
+    height: 36px !important;
+    min-height: 36px !important;
+    max-height: 36px !important;
+    margin: 0 !important;
+    padding: 0 10px !important;
+    font-size: 0.85rem !important;
+    font-weight: 600 !important;
+    letter-spacing: normal !important;
+    border-radius: 7px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    white-space: nowrap !important;
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: unset !important;
+    max-width: unset !important;
+    cursor: pointer !important;
+    box-sizing: border-box !important;
+    line-height: 1 !important;
+}
+
+
+.toolbar-status-inline {
+    flex: 1 1 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    text-align: left !important;
+    overflow: hidden !important;
+    font-size: 0.8rem !important;
+    color: var(--text-muted) !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    pointer-events: none !important;
+}
+.toolbar-status-inline p {
+    margin: 0 !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+}
+.toolbar-status-inline:empty,
+.toolbar-status-inline p:empty {
+    display: none !important;
+}
+
+/* ==================== SAVE-STATE BUTTON & FOLDER-NAME TOGGLES ==================== */
+/* Saved state reads as a quiet confirmation; unsaved state reads as an action. */
+.save-preset-btn button:disabled,
+button.save-preset-btn:disabled,
+.save-preset-btn:disabled {
+    opacity: 1 !important;
+    cursor: default !important;
+    color: #16a34a !important;
+    background: rgba(22, 163, 74, 0.10) !important;
+    border: 1px solid rgba(22, 163, 74, 0.35) !important;
+    box-shadow: none !important;
+}
+body.dark .save-preset-btn button:disabled,
+body.dark button.save-preset-btn:disabled {
+    color: #4ade80 !important;
+    background: rgba(74, 222, 128, 0.12) !important;
+    border: 1px solid rgba(74, 222, 128, 0.30) !important;
+}
+
+#yue-tip {
+    position: fixed !important;
+    z-index: 99999 !important;
+    pointer-events: none !important;
+    opacity: 0;
+    transition: opacity 0.12s ease !important;
+    max-width: 330px !important;
+    padding: 8px 11px !important;
+    border-radius: 8px !important;
+    font-size: 0.78rem !important;
+    line-height: 1.5 !important;
+    background: #18181b !important;
+    color: #fafafa !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.30) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+#yue-tip.on {
+    opacity: 1;
+}
+
+/* ==================== VERTICAL DENSITY ====================
+   Gradio's default rhythm spends most of the column on air between controls.
+   Tightening it buys the prompt and lyrics boxes their height back. */
+.gradio-container .row { gap: 8px !important; }
+.gradio-container .column { gap: 6px !important; }
+.gradio-container .form { margin-bottom: 0 !important; border: none !important; }
+.gradio-container .block { padding-top: 5px !important; padding-bottom: 5px !important; }
+.gradio-container .gap { gap: 6px !important; }
+
+/* Slider and number labels: one line, never two */
+.gradio-container span[data-testid="block-info"],
+.gradio-container .head label,
+.gradio-container label > span {
+    white-space: nowrap !important;
+    font-size: 0.8rem !important;
+    margin-bottom: 1px !important;
+}
+
+/* The number box beside each slider was eating the label's width */
+.gradio-container input[type="number"] {
+    max-width: 58px !important;
+    padding-left: 6px !important;
+    padding-right: 4px !important;
+    font-size: 0.8rem !important;
+    text-align: right !important;
+}
+.gradio-container .head {
+    gap: 6px !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+}
+.gradio-container .head > label,
+.gradio-container .head > span {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+}
+
+.field-header-label {
+    margin: 9px 0 1px 0 !important;
+}
+.field-header-row {
+    margin-bottom: 1px !important;
+}
+
+/* Accordion chrome */
+.gradio-container .label-wrap {
+    padding: 7px 0 !important;
+    font-size: 0.84rem !important;
+}
+
+.star-report {
+    font-size: 0.86rem !important;
+    line-height: 1.6 !important;
+}
+.star-report h2 {
+    font-size: 1.15rem !important;
+    margin: 4px 0 2px !important;
+}
+.star-report h3 {
+    font-size: 0.95rem !important;
+    margin: 20px 0 6px !important;
+    padding-top: 12px !important;
+    border-top: 1px solid var(--border-color, #e4e4e7) !important;
+}
+.star-report table {
+    font-size: 0.82rem !important;
+    width: 100% !important;
+    border-collapse: collapse !important;
+}
+.star-report td, .star-report th {
+    padding: 4px 8px !important;
+}
+.star-report blockquote {
+    border-left: 3px solid rgba(139, 92, 246, 0.5) !important;
+    margin: 10px 0 !important;
+    padding: 6px 12px !important;
+    background: rgba(139, 92, 246, 0.06) !important;
+    border-radius: 0 6px 6px 0 !important;
+}
+.star-report code {
+    font-size: 0.8rem !important;
+    padding: 1px 5px !important;
+}
+
+.favs-playlist,
+.favs-playlist p {
+    font-size: 0.84rem !important;
+    line-height: 1.5 !important;
+    margin: 2px 0 !important;
+}
+.favs-playlist ol,
+.favs-playlist li {
+    margin: 2px 0 !important;
+}
+
+.yue-tip-target {
+    cursor: help !important;
+    text-decoration: underline dotted rgba(139, 92, 246, 0.55) !important;
+    text-underline-offset: 3px !important;
+}
+button.yue-tip-target {
+    text-decoration: none !important;
+}
+
+.favs-filter,
+.favs-filter label,
+div.favs-filter {
+    width: auto !important;
+    min-width: 160px !important;
+    flex: 0 0 auto !important;
+    white-space: nowrap !important;
+}
+
+.rating-radio,
+.rating-radio .wrap {
+    gap: 3px !important;
+    flex-wrap: nowrap !important;
+    display: flex !important;
+}
+.rating-radio label {
+    padding: 3px 9px !important;
+    margin: 0 !important;
+    font-size: 0.8rem !important;
+    border-radius: 6px !important;
+    white-space: nowrap !important;
+}
+.rating-row {
+    margin-top: 2px !important;
+}
+
+.tight-check,
+div.tight-check {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 58px !important;
+    max-width: 68px !important;
+}
+
+.fav-btn,
+button.fav-btn {
+    font-size: 0.9rem !important;
+    letter-spacing: 0.02em !important;
+}
+
+.stage-label,
+.stage-label p {
+    font-size: 0.78rem !important;
+    line-height: 1.4 !important;
+    color: var(--text-muted) !important;
+    margin: 9px 0 1px 2px !important;
+    padding: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    position: relative !important;
+    z-index: 3 !important;
+    letter-spacing: 0.01em !important;
+}
+.stage-label:first-of-type,
+.stage-label:first-child {
+    margin-top: 4px !important;
+}
+.stage-label strong {
+    color: var(--text-main) !important;
+}
+
+.nowrap-btn,
+button.nowrap-btn,
+.nowrap-btn button {
+    white-space: nowrap !important;
+    flex: 0 0 auto !important;
+}
+
+.icon-btn,
+button.icon-btn {
+    padding: 0 8px !important;
+    min-width: 34px !important;
+}
+
+/* The three toggles all compose one string, so they sit with the preview. */
+.folder-toggle-row {
+    gap: 0 !important;
+    margin-top: -2px !important;
+    margin-bottom: 12px !important;
+    opacity: 0.85 !important;
+}
+.folder-toggle-row .nowrap-check,
+.folder-toggle-row > div.nowrap-check {
+    margin: 0 16px 0 0 !important;
+}
+.folder-toggle-row .toggle-row-label {
+    margin: 0 10px 0 0 !important;
+}
+.toggle-row-label,
+.toggle-row-label p {
+    font-size: 0.78rem !important;
+    font-weight: 500 !important;
+    color: var(--text-muted) !important;
+    margin: 0 !important;
+    white-space: nowrap !important;
+    flex: 0 0 auto !important;
+}
+.folder-toggle-row .nowrap-check span {
+    font-size: 0.78rem !important;
+}
+.field-header-spaced {
+    margin-top: 10px !important;
+}
+
+"""
+
+with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
+    gr.HTML("""
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px; padding: 2px 0;">
+        <h1 style="font-size: 1.75rem; font-weight: 800; background: var(--header-title); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0;">
+            YuE2 Music Studio
+        </h1>
+        <button id="theme-toggle-btn" class="theme-toggle-btn" onclick="window.toggleTheme()">
+            🌓 Dark / Light
+        </button>
+    </div>
+    """)
+
+    all_presets = load_all_presets()
+    preset_names = list(all_presets.keys())
+    default_preset_name = preset_names[0] if preset_names else ""
+    init_p = all_presets.get(default_preset_name, {})
+
+    with gr.Tabs():
+        # TAB 1: Creation Studio
+        with gr.TabItem("🎛️ Creation Studio"):
+            last_preset_state = gr.State(default_preset_name)
+
+            with gr.Row(elem_classes=["preset-toolbar-single-row"]):
+                with gr.Row(scale=1, elem_classes=["preset-group"]):
+                    gr.Markdown("**Preset:**", scale=0, min_width=0, elem_classes=["toolbar-label"])
+                    preset_dropdown = gr.Dropdown(
+                        choices=visible_preset_choices(),
+                        value=default_preset_name,
+                        show_label=False,
+                        interactive=True,
+                        allow_custom_value=True,
+                        info=None,
+                        scale=1,
+                        min_width=0,
+                        elem_classes=["compact-dropdown", "preset-select"]
+                    )
+                    save_preset_btn = gr.Button(
+                        "✓ Saved",
+                        variant="secondary",
+                        interactive=False,
+                        scale=0,
+                        min_width=0,
+                        elem_classes=["rename-btn", "toolbar-btn", "save-preset-btn"],
+                        elem_id="tip-save"
+                    )
+                    revert_preset_btn = gr.Button(
+                        "↺ Revert",
+                        scale=0,
+                        min_width=0,
+                        elem_classes=["finder-btn", "toolbar-btn"]
+                    )
+                    show_all_presets = gr.Checkbox(
+                        label="all", value=False, scale=0, min_width=0,
+                        elem_classes=["nowrap-check", "tight-check"],
+                        elem_id="tip-show-all-presets"
+                    )
+                    delete_preset_btn = gr.Button(
+                        "🗑️",
+                        scale=0,
+                        min_width=0,
+                        elem_classes=["finder-btn", "toolbar-btn", "icon-btn"]
+                    )
+                preset_status = gr.Markdown("", scale=0, min_width=0, elem_classes=["toolbar-status-inline"])
+
+            with gr.Row():
+                # LEFT COLUMN: Words & Style
+                with gr.Column(scale=5):
+                    gr.Markdown("**Track Title / Folder Name**", elem_classes=["field-header-label"])
+                    custom_title = gr.Textbox(
+                        show_label=False,
+                        placeholder="e.g. cyber_hopkins_v1 (or leave blank to auto-name)",
+                        value=init_p.get("custom_title", "")
+                    )
+                    init_preview_text = update_folder_preview(
+                        init_p.get("custom_title", ""), init_p.get("lyrics", "")
+                    )
+                    folder_preview = gr.Markdown(init_preview_text, elem_classes=["folder-preview-card"])
+                    with gr.Row(elem_classes=["field-header-row", "folder-toggle-row"]):
+                        append_tag_check = gr.Checkbox(
+                            label="tag folder with changed parameters", value=True,
+                            scale=0, min_width=280, elem_classes=["nowrap-check"],
+                            elem_id="tip-append-tag"
+                        )
+                        audio_format_dd = gr.Dropdown(
+                            choices=list(AUDIO_FORMATS.keys()), value=DEFAULT_AUDIO_FORMAT,
+                            label="", show_label=False, interactive=True, scale=0, min_width=210,
+                            elem_classes=["compact-dropdown"], elem_id="tip-audio-format"
+                        )
+
+                    gr.Markdown("**Style & Production Prompt**", elem_classes=["field-header-label", "field-header-spaced"])
+                    style_input = gr.Textbox(
+                        show_label=False,
+                        value=init_p.get("style", ""),
+                        lines=7,
+                        max_lines=16
+                    )
+
+                    gr.Markdown("**Lyrics (with [Section] tags)**", elem_classes=["field-header-label", "field-header-spaced"])
+                    lyrics_input = gr.Textbox(
+                        show_label=False,
+                        value=init_p.get("lyrics", ""),
+                        lines=8,
+                        max_lines=12
+                    )
+
+                # RIGHT COLUMN: Sound & Generation Controls
+                with gr.Column(scale=5):
+                    with gr.Group():
+                        gr.Markdown("#### ⚙️ Sound & Generation Parameters")
+
+                        gr.Markdown("**Stage 1 · Score (ABC)** — key, chords, melody, bar structure", elem_classes=["stage-label"])
+                        with gr.Row():
+                            score_temp_slider = gr.Slider(0.1, 2.0, value=float(init_p.get("score_temp", 0.75)), step=0.05,
+                                                          label="Exploration", elem_id="tip-score-temp")
+                            score_top_p_slider = gr.Slider(0.1, 1.0, value=float(init_p.get("score_top_p", 0.9)), step=0.05,
+                                                           label="Top-P", elem_id="tip-score-top-p")
+                            score_rep_pen_slider = gr.Slider(1.0, 1.3, value=float(param_value(init_p, "score_rep_pen")), step=0.005,
+                                                             label="Repetition", elem_id="tip-score-rep")
+
+                        gr.Markdown("**Stage 2 · Semantic (codec)** — timbre, vocal delivery, arrangement", elem_classes=["stage-label"])
+                        with gr.Row():
+                            sem_temp_slider = gr.Slider(0.1, 2.0, value=float(init_p.get("sem_temp", 1.15)), step=0.05,
+                                                        label="Wildness", elem_id="tip-sem-temp")
+                            sem_top_p_slider = gr.Slider(0.1, 1.0, value=float(init_p.get("sem_top_p", 0.95)), step=0.05,
+                                                         label="Top-P", elem_id="tip-sem-top-p")
+                            rep_pen_slider = gr.Slider(1.0, 1.5, value=float(param_value(init_p, "rep_pen")), step=0.01,
+                                                       label="Repetition", elem_id="tip-sem-rep")
+
+                        gr.Markdown("**Stage 3 · Decode & seed**", elem_classes=["stage-label"])
+                        with gr.Row():
+                            flow_steps_slider = gr.Slider(8, 32, value=int(param_value(init_p, "flow_steps")), step=4,
+                                                          label="Flow Steps", elem_id="tip-flow")
+                            cfg_slider = gr.Slider(1.0, 3.0, value=float(param_value(init_p, "cfg_scale")), step=0.1,
+                                                   label="CFG", elem_id="tip-cfg")
+                            seed_input = gr.Number(value=int(param_value(init_p, "seed")), label="Seed",
+                                                   precision=0, elem_id="tip-seed")
+
+                        with gr.Accordion("🔬 Advanced — candidate pools, memory, length", open=False):
+                            gr.Markdown("**Top-K** caps how many candidates survive *before* Top-P. "
+                                        "Raising it widens choice without flattening the distribution — "
+                                        "this is the melodic-variety control that costs the least legibility.",
+                                        elem_classes=["stage-label"])
+                            with gr.Row():
+                                score_top_k_slider = gr.Slider(5, 200, value=int(param_value(init_p, "score_top_k")), step=5,
+                                                               label="Score Top-K", elem_id="tip-score-topk")
+                                sem_top_k_slider = gr.Slider(5, 400, value=int(param_value(init_p, "sem_top_k")), step=5,
+                                                             label="Vocal Top-K", elem_id="tip-sem-topk")
+                            gr.Markdown("**Penalty window** — how many recent tokens the repetition penalty looks back over.",
+                                        elem_classes=["stage-label"])
+                            with gr.Row():
+                                score_pen_win_slider = gr.Slider(1, 100, value=int(param_value(init_p, "score_pen_win")), step=1,
+                                                                 label="Score Window", elem_id="tip-score-win")
+                                sem_pen_win_slider = gr.Slider(1, 100, value=int(param_value(init_p, "sem_pen_win")), step=1,
+                                                               label="Vocal Window", elem_id="tip-sem-win")
+                            gr.Markdown("**Length & mode** — token budget for the audio stage, and whether a score is written at all.",
+                                        elem_classes=["stage-label"])
+                            with gr.Row():
+                                sem_min_tokens_slider = gr.Slider(0, 2000, value=int(param_value(init_p, "sem_min_tokens")), step=50,
+                                                                  label="Min Length", elem_id="tip-minlen")
+                                sem_max_tokens_slider = gr.Slider(1000, 14000, value=int(param_value(init_p, "sem_max_tokens")), step=250,
+                                                                  label="Max Length", elem_id="tip-maxlen")
+                                cot_mode_dropdown = gr.Dropdown(
+                                    choices=["full", "melody", "off"],
+                                    value=str(param_value(init_p, "cot_mode")),
+                                    label="Score Mode", interactive=True, elem_id="tip-cot"
+                                )
+
+                    one_click_btn = gr.Button("⚡ 1-Click Fast Song (Plan & Synthesize)", elem_classes=["one-click-btn"], size="lg")
+                    with gr.Row():
+                        plan_btn = gr.Button("🎼 Plan Score Only (~20s)", elem_classes=["accent-btn"], size="sm")
+                        render_btn = gr.Button("🎶 Synthesize Audio", elem_classes=["accent-btn", "draft-btn"], size="sm")
+                        stop_btn = gr.Button("🛑 Stop", variant="stop", size="sm", scale=0, min_width=96,
+                                             elem_classes=["nowrap-btn"], elem_id="tip-stop")
+
+                    studio_status = gr.Markdown("")
+                    audio_output = gr.Audio(label="Master Audio Player", type="filepath")
+                    with gr.Row(elem_classes=["field-header-row"]):
+                        gr.Markdown("rate:", elem_classes=["toggle-row-label"])
+                        studio_rating = gr.Radio(
+                            choices=RATING_CHOICES, value=RATING_CHOICES[0],
+                            label="", show_label=False, container=False, visible=False,
+                            elem_classes=["rating-radio"], elem_id="tip-rating"
+                        )
+                        last_render_state = gr.State("")
+
+        # TAB 2: Sheet Music & Score Studio
+        with gr.TabItem("🎼 Sheet Music & Score Studio (Visual ABC)") as score_tab:
+            with gr.Row():
+                with gr.Column(scale=5):
+                    gr.Markdown("### 📄 ABC Symbolic Notation Editor")
+                    abc_editor = gr.Code(
+                        label="Editable ABC Notation (Chords, Notes, Tempo, Keys)",
+                        language="markdown",
+                        lines=16,
+                        max_lines=26,
+                        value=""
+                    )
+                    with gr.Row():
+                        render_sheet_btn = gr.Button("🔄 Re-render Visual Sheet Music", elem_classes=["accent-btn"])
+                        render_from_score_btn = gr.Button("🎶 Synthesize Audio from this Score", elem_classes=["accent-btn", "draft-btn"])
+                    metrics_display = gr.Markdown("Click 'Plan Score' or edit above to calculate section timings.")
+                    score_synth_status = gr.Markdown("")
+                    score_audio_output = gr.Audio(label="Rendered Audio", type="filepath")
+
+                with gr.Column(scale=5):
+                    gr.Markdown("### 🎼 Live Sheet Music (Rendered via abcjs)")
+                    sheet_html = gr.HTML('<div id="sheet-music-paper"><p style="color:#64748b; text-align:center; padding:40px 0;">🎼 Sheet music will render here as classical notation staves, clefs, notes, and chords.</p></div>')
+
+        # TAB 3: Track Library & Manager
+        with gr.TabItem("📁 Track Library & Manager (Playback, Rename, Browse)") as library_tab:
+            with gr.Row():
+                with gr.Column(scale=6):
+                    gr.Markdown("### 🗃️ All Songs & Renders")
+                    with gr.Row():
+                        refresh_lib_btn = gr.Button("🔄 Refresh Library", size="sm")
+                        reveal_btn = gr.Button("📂 Reveal in Finder", elem_classes=["finder-btn"], size="sm")
+                        play_system_btn = gr.Button("🔊 Play in macOS Player", elem_classes=["finder-btn"], size="sm")
+                        favs_only_check = gr.Dropdown(
+                            choices=FILTER_CHOICES, value="all", label="", show_label=False,
+                            interactive=True, scale=0, min_width=150,
+                            elem_classes=["compact-dropdown"], elem_id="tip-favs-only"
+                        )
+
+                    track_selector = gr.Dropdown(
+                        label="Select Track to Play & Manage (or click row in table below)",
+                        choices=[],
+                        interactive=True
+                    )
+
+                    track_table = gr.Dataframe(
+                        headers=["★", "Track Folder", "Duration", "Key & BPM", "Size", "Created Date"],
+                        datatype=["str", "str", "str", "str", "str", "str"],
+                        column_widths=["4%", "40%", "12%", "16%", "12%", "16%"],
+                        interactive=False,
+                        wrap=True
+                    )
+
+                    with gr.Accordion("★ Favorites playlist", open=False) as favs_panel:
+                        favs_playlist = gr.Markdown("*No starred tracks yet.*",
+                                                    elem_classes=["favs-playlist"])
+
+                    with gr.Group():
+                        gr.Markdown("#### ✏️ Rename or Delete Track")
+                        with gr.Row():
+                            new_name_input = gr.Textbox(
+                                label="New Track Name",
+                                placeholder="Enter clean new name (e.g. cyber_hopkins_master)"
+                            )
+                            rename_btn = gr.Button("Rename Track", elem_classes=["rename-btn"])
+                            delete_btn = gr.Button("🗑️ Delete Track", elem_classes=["finder-btn"])
+                        rename_status = gr.Markdown("")
+
+                with gr.Column(scale=4):
+                    gr.Markdown("### 🎧 Selected Track Playback")
+                    library_audio = gr.Audio(label="Audio Player", type="filepath", autoplay=True)
+                    with gr.Row(elem_classes=["field-header-row"]):
+                        prev_btn = gr.Button("⏮", size="sm", scale=0, min_width=52,
+                                             elem_classes=["nowrap-btn", "finder-btn"], elem_id="tip-prev")
+                        next_btn = gr.Button("⏭", size="sm", scale=0, min_width=52,
+                                             elem_classes=["nowrap-btn", "finder-btn"], elem_id="tip-next")
+                        autoplay_check = gr.Checkbox(label="continuous", value=True, scale=0,
+                                                     min_width=130, elem_classes=["nowrap-check"],
+                                                     elem_id="tip-autoplay")
+                    with gr.Row(elem_classes=["field-header-row", "rating-row"]):
+                        gr.Markdown("rate:", elem_classes=["toggle-row-label"])
+                        lib_rating = gr.Radio(
+                            choices=RATING_CHOICES, value=RATING_CHOICES[0],
+                            label="", show_label=False, container=False,
+                            elem_classes=["rating-radio"], elem_id="tip-rating-lib"
+                        )
+                        build_page_btn = gr.Button("🌐 Build playlist page", size="sm", scale=0,
+                                                   min_width=190, elem_classes=["nowrap-btn", "rename-btn"],
+                                                   elem_id="tip-build-page")
+                        export_favs_btn = gr.Button("📄 Export JSON", size="sm", scale=0,
+                                                    min_width=140, elem_classes=["nowrap-btn", "finder-btn"],
+                                                    elem_id="tip-export-favs")
+                        redecode_btn = gr.Button("🎧 Rebuild lossless", size="sm", scale=0,
+                                                 min_width=170, elem_classes=["nowrap-btn", "finder-btn"],
+                                                 elem_id="tip-redecode")
+                    with gr.Row(elem_classes=["field-header-row"]):
+                        upgrade_steps = gr.Dropdown(
+                            choices=[16, 24, 32], value=32, label="", show_label=False,
+                            interactive=True, scale=0, min_width=90,
+                            elem_classes=["compact-dropdown"], elem_id="tip-upgrade-steps"
+                        )
+                        upgrade_btn = gr.Button("⬆ Re-solve at higher steps", size="sm", scale=0,
+                                                min_width=230, elem_classes=["nowrap-btn", "rename-btn"],
+                                                elem_id="tip-upgrade")
+
+                    with gr.Accordion("📄 Musical Score & Section Timings", open=True):
+                        lib_metrics = gr.Markdown("")
+                        library_score = gr.Code(label="ABC Score", language="markdown", lines=8)
+
+                    with gr.Accordion("📝 Prompt, Parameters & Lyrics Used", open=False):
+                        lib_params = gr.Markdown("", elem_classes=["folder-preview-card"])
+                        lib_style = gr.Textbox(label="Style Prompt", lines=2, interactive=False)
+                        lib_lyrics = gr.Textbox(label="Lyrics", lines=6, interactive=False)
+
+                    with gr.Row(elem_classes=["field-header-row"]):
+                        lib_display_name = gr.Textbox(
+                            label="", show_label=False, container=False, scale=1,
+                            placeholder="display name for the playlist page — e.g. iridescent scaling",
+                            elem_id="tip-display-name"
+                        )
+                        save_name_btn = gr.Button("🏷️ Name", size="sm", scale=0, min_width=92,
+                                                  elem_classes=["nowrap-btn", "rename-btn"])
+
+                    with gr.Accordion("🗒️ Notes for this track", open=False):
+                        lib_notes = gr.Textbox(
+                            label="", lines=4, placeholder="Accompanying text — appears under this track on the playlist page.",
+                            elem_id="tip-notes"
+                        )
+                        save_notes_btn = gr.Button("💾 Save notes", size="sm", elem_classes=["rename-btn"])
+
+            def refresh_ui(min_rating_label="all"):
+                tracks = filter_by_rating(get_track_data(), min_rating_label)
+                choices = [t["name"] for t in tracks]
+                table = get_track_table(min_rating_label)
+                first = choices[0] if choices else None
+                return gr.update(choices=choices, value=first), gr.update(value=table)
+
+            def on_table_select(evt: gr.SelectData, min_rating_label="all"):
+                if evt and evt.index and len(evt.index) > 0:
+                    row = evt.index[0]
+                    tracks = filter_by_rating(get_track_data(), min_rating_label)
+                    if 0 <= row < len(tracks):
+                        return tracks[row]["name"]
+                return gr.update()
+
+            def export_favorites():
+                """Write favorites.json in outputs/ — the input for the favorites webpage."""
+                favs = [t for t in get_track_data()
+                        if t.get("rating") is not None and t["rating"] >= FAVORITE_THRESHOLD]
+                payload = []
+                for t in favs:
+                    meta = read_track_metadata(Path(t["path"]))
+                    payload.append({
+                        "folder": t["name"],
+                        "title": meta.get("track_title", t["name"]),
+                        "preset": meta.get("preset", ""),
+                        "created": meta.get("created", ""),
+                        "duration": t["duration"],
+                        "key_bpm": t["key_bpm"],
+                        "audio": t["audio"],
+                        "style": t["style"],
+                        "lyrics": t["lyrics"],
+                        "parameters": meta.get("parameters", {}),
+                        "rating": t.get("rating"),
+                        "notes": meta.get("notes", ""),
+                    })
+                out = Path("outputs") / "favorites.json"
+                out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+                return f"📄 Wrote `{out}` — {len(payload)} favorite(s)."
+
+            track_table.select(on_table_select, inputs=[favs_only_check], outputs=[track_selector])
+            library_tab.select(refresh_ui, inputs=[favs_only_check], outputs=[track_selector, track_table])
+            refresh_lib_btn.click(refresh_ui, inputs=[favs_only_check], outputs=[track_selector, track_table])
+            favs_only_check.change(refresh_ui, inputs=[favs_only_check], outputs=[track_selector, track_table])
+
+            lib_rating.change(
+                set_rating,
+                inputs=[track_selector, lib_rating],
+                outputs=[lib_rating, rename_status]
+            ).then(
+                refresh_ui, inputs=[favs_only_check], outputs=[track_selector, track_table]
+            ).then(
+                favorites_playlist_markdown, outputs=[favs_playlist]
+            )
+
+            export_favs_btn.click(export_favorites, outputs=[rename_status])
+
+            redecode_btn.click(
+                redecode_lossless,
+                inputs=[track_selector],
+                outputs=[library_audio, rename_status]
+            )
+
+            upgrade_btn.click(
+                upgrade_flow_steps,
+                inputs=[track_selector, upgrade_steps],
+                outputs=[library_audio, rename_status]
+            )
+
+            prev_btn.click(
+                lambda current, flt: step_track(current, flt, -1),
+                inputs=[track_selector, favs_only_check],
+                outputs=[track_selector]
+            )
+            next_btn.click(
+                lambda current, flt: step_track(current, flt, 1),
+                inputs=[track_selector, favs_only_check],
+                outputs=[track_selector]
+            )
+            library_audio.stop(
+                advance_if_autoplay,
+                inputs=[track_selector, favs_only_check, autoplay_check],
+                outputs=[track_selector]
+            )
+
+            build_page_btn.click(
+                lambda: build_favorites_page()[0],
+                outputs=[rename_status]
+            )
+
+            save_notes_btn.click(
+                save_track_notes,
+                inputs=[track_selector, lib_notes],
+                outputs=[rename_status]
+            )
+
+            save_name_btn.click(
+                save_display_name,
+                inputs=[track_selector, lib_display_name],
+                outputs=[rename_status]
+            ).then(
+                favorites_playlist_markdown, outputs=[favs_playlist]
+            )
+            lib_display_name.submit(
+                save_display_name,
+                inputs=[track_selector, lib_display_name],
+                outputs=[rename_status]
+            )
+
+            track_selector.change(
+                rating_for_track, inputs=[track_selector], outputs=[lib_rating]
+            )
+            track_selector.change(
+                load_track_notes, inputs=[track_selector], outputs=[lib_notes]
+            )
+            track_selector.change(
+                load_display_name, inputs=[track_selector], outputs=[lib_display_name]
+            )
+            library_tab.select(favorites_playlist_markdown, outputs=[favs_playlist])
+            refresh_lib_btn.click(favorites_playlist_markdown, outputs=[favs_playlist])
+
+            track_selector.change(
+                select_track_by_name,
+                inputs=[track_selector],
+                outputs=[library_audio, library_score, lib_metrics, lib_params, lib_style, lib_lyrics, rename_status]
+            )
+
+            # Auto-fill rename box when track changes
+            track_selector.change(
+                lambda name: name or "",
+                inputs=[track_selector],
+                outputs=[new_name_input]
+            )
+
+            rename_btn.click(
+                rename_track_action,
+                inputs=[track_selector, new_name_input],
+                outputs=[track_selector, track_table, rename_status]
+            )
+
+            reveal_btn.click(
+                reveal_in_finder_action,
+                inputs=[track_selector],
+                outputs=[rename_status]
+            )
+
+            play_system_btn.click(
+                play_in_system_action,
+                inputs=[track_selector],
+                outputs=[rename_status]
+            )
+
+            delete_btn.click(
+                delete_track_action,
+                inputs=[track_selector],
+                outputs=[
+                    track_selector, track_table,
+                    library_audio, library_score, lib_metrics, lib_params, lib_style, lib_lyrics,
+                    rename_status
+                ]
+            )
+
+        # TAB 4: Star Analysis
+        with gr.TabItem("📊 Star Analysis (What You Keep)") as analysis_tab:
+            with gr.Row(elem_classes=["field-header-row"]):
+                refresh_report_btn = gr.Button("🔄 Rebuild report", size="sm", scale=0,
+                                               min_width=170, elem_classes=["nowrap-btn", "rename-btn"],
+                                               elem_id="tip-star-report")
+                save_favs_preset_btn = gr.Button("💾 Save FAVS preset", size="sm", scale=0,
+                                                 min_width=190, elem_classes=["nowrap-btn", "finder-btn"],
+                                                 elem_id="tip-save-favs-preset")
+                report_status = gr.Markdown("", elem_classes=["toolbar-status-inline"])
+                migrate_btn = gr.Button("↗ Migrate old stars", size="sm", scale=0,
+                                        min_width=180, elem_classes=["nowrap-btn", "finder-btn"],
+                                        elem_id="tip-migrate")
+            star_report = gr.Markdown("*Open this tab to build the report.*",
+                                      elem_classes=["star-report"])
+            with gr.Accordion("Preset ranking — mean rating of each preset's renders", open=False):
+                preset_ranking = gr.Markdown("", elem_classes=["star-report"])
+
+    # Every parameter component, in PARAM_SPEC order. Each wiring list below is
+    # built from this, so adding a parameter means adding it to PARAM_SPEC and here.
+    PARAM_COMPONENTS = [
+        score_temp_slider, score_top_p_slider, score_rep_pen_slider,
+        score_top_k_slider, score_pen_win_slider,
+        sem_temp_slider, sem_top_p_slider, rep_pen_slider,
+        sem_top_k_slider, sem_pen_win_slider,
+        sem_min_tokens_slider, sem_max_tokens_slider,
+        cfg_slider, flow_steps_slider, seed_input, cot_mode_dropdown,
+    ]
+    assert len(PARAM_COMPONENTS) == len(PARAM_SPEC), "PARAM_COMPONENTS must match PARAM_SPEC"
+
+    # Wire Preset actions (single editable dropdown)
+    preset_field_outputs = (
+        [style_input, lyrics_input, custom_title]
+        + PARAM_COMPONENTS
+        + [preset_status, last_preset_state]
+    )
+
+    preset_dropdown.change(
+        select_preset,
+        inputs=[preset_dropdown, custom_title, last_preset_state],
+        outputs=preset_field_outputs
+    )
+
+    revert_preset_btn.click(
+        revert_preset,
+        inputs=[preset_dropdown],
+        outputs=preset_field_outputs
+    )
+
+    save_preset_btn.click(
+        save_preset,
+        inputs=[preset_dropdown, style_input, lyrics_input, custom_title] + PARAM_COMPONENTS,
+        outputs=[preset_dropdown, preset_status, last_preset_state, save_preset_btn]
+    )
+
+    delete_preset_btn.click(
+        delete_custom_preset,
+        inputs=[preset_dropdown],
+        outputs=[preset_dropdown, preset_status]
+    )
+
+    # Wire Studio Creation Buttons
+    def reveal_rating(folder_name):
+        """Rating is meaningless until a render exists to rate."""
+        if not folder_name:
+            return gr.update(visible=False)
+        return gr.update(visible=True, value=rating_for_track(folder_name))
+
+    one_click_btn.click(
+        one_click_generate_step,
+        inputs=([style_input, lyrics_input, custom_title] + PARAM_COMPONENTS
+                + [append_tag_check, audio_format_dd, preset_dropdown]),
+        outputs=[audio_output, abc_editor, metrics_display, studio_status, last_render_state]
+    ).then(
+        reveal_rating,
+        inputs=[last_render_state],
+        outputs=[studio_rating]
+    )
+
+    stop_btn.click(request_cancel, outputs=[studio_status])
+
+    plan_btn.click(
+        generate_plan_step,
+        inputs=[
+            style_input, lyrics_input, seed_input,
+            score_temp_slider, score_top_p_slider, score_rep_pen_slider,
+            score_top_k_slider, score_pen_win_slider, cot_mode_dropdown
+        ],
+        outputs=[abc_editor, metrics_display, studio_status]
+    )
+
+    render_inputs = [
+        style_input, lyrics_input, abc_editor, seed_input, flow_steps_slider,
+        sem_temp_slider, sem_top_p_slider, rep_pen_slider, cfg_slider, custom_title,
+        preset_dropdown,
+        score_temp_slider, score_top_p_slider, score_rep_pen_slider,
+        sem_top_k_slider, sem_pen_win_slider,
+        sem_min_tokens_slider, sem_max_tokens_slider,
+        score_top_k_slider, score_pen_win_slider, cot_mode_dropdown,
+        append_tag_check, audio_format_dd
+    ]
+
+    render_btn.click(
+        synthesize_audio_step,
+        inputs=render_inputs,
+        outputs=[audio_output, studio_status, last_render_state]
+    ).then(
+        reveal_rating,
+        inputs=[last_render_state],
+        outputs=[studio_rating]
+    )
+
+    studio_rating.change(
+        set_rating,
+        inputs=[last_render_state, studio_rating],
+        outputs=[studio_rating, studio_status]
+    )
+
+    # one_click_generate_step takes append_tag before preset_name, so the studio
+    # state listener must include the checkbox in the same canonical position.
+
+    # Wire Tab 2 Sheet Music Studio Buttons
+    render_sheet_btn.click(
+        None,
+        inputs=[abc_editor],
+        js="(abc) => { window.renderSheetMusic(abc); }"
+    )
+
+    score_tab.select(
+        None,
+        inputs=[abc_editor],
+        js="(abc) => { setTimeout(() => window.renderSheetMusic(abc), 250); }"
+    )
+
+    abc_editor.change(
+        parse_abc_metrics,
+        inputs=[abc_editor],
+        outputs=[metrics_display]
+    )
+
+    render_from_score_btn.click(
+        synthesize_audio_step,
+        inputs=render_inputs,
+        outputs=[score_audio_output, score_synth_status, last_render_state]
+    )
+
+    # Wire live folder-name preview + save-state button
+    studio_state_inputs = ([custom_title, preset_dropdown, style_input, lyrics_input,
+                            append_tag_check] + PARAM_COMPONENTS)
+    for comp in studio_state_inputs:
+        comp.change(
+            refresh_studio_state,
+            inputs=studio_state_inputs,
+            outputs=[folder_preview, save_preset_btn]
+        )
+
+    analysis_tab.select(star_report_markdown, outputs=[star_report])
+    analysis_tab.select(preset_score_markdown, outputs=[preset_ranking])
+    refresh_report_btn.click(preset_score_markdown, outputs=[preset_ranking])
+    migrate_btn.click(migrate_ratings, outputs=[report_status]).then(
+        star_report_markdown, outputs=[star_report]
+    ).then(preset_score_markdown, outputs=[preset_ranking])
+
+    # Defined in a later tab than the rating controls, so these attach here.
+    lib_rating.change(star_report_markdown, outputs=[star_report])
+    lib_rating.change(preset_score_markdown, outputs=[preset_ranking])
+    studio_rating.change(star_report_markdown, outputs=[star_report])
+
+    # Preset list filtering
+    show_all_presets.change(
+        refresh_preset_list,
+        inputs=[show_all_presets, preset_dropdown],
+        outputs=[preset_dropdown]
+    )
+    lib_rating.change(
+        refresh_preset_list,
+        inputs=[show_all_presets, preset_dropdown],
+        outputs=[preset_dropdown]
+    )
+    refresh_report_btn.click(star_report_markdown, outputs=[star_report])
+    save_favs_preset_btn.click(
+        save_favs_preset,
+        outputs=[report_status, preset_dropdown]
+    ).then(star_report_markdown, outputs=[star_report])
+
+    demo.load(refresh_ui, outputs=[track_selector, track_table])
+
+
+if __name__ == "__main__":
+    demo.launch(
+        server_name="127.0.0.1",
+        server_port=7860,
+        inbrowser=False,
+        head=HEAD_SCRIPTS,
+        theme=gr.themes.Soft(primary_hue="violet", neutral_hue="slate"),
+        css=CUSTOM_CSS
+    )

@@ -1,0 +1,16 @@
+# renders: hundreds of MB, regenerable, not source
+outputs/
+!outputs/favorites_page/
+
+# the published page keeps its audio, but not the working copies
+outputs/favorites_page/audio/*.flac
+
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# model weights and caches
+*.safetensors
+*.bin
+*.npy
