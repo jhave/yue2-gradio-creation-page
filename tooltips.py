@@ -120,8 +120,16 @@ TOOLTIPS.update({
 })
 
 TOOLTIPS["tip-drop"] = (
-    "Drop a .abc score, a prompt.md, or both. The score goes to the panel below; "
-    "a prompt file fills the style box, and the lyrics box too when it marks its "
-    "lyrics with a heading or with [Section] tags. Boxes you have already written "
-    "in are left alone — clear one to let a file replace it."
+    "Drop a request.json, a .abc score, a prompt.md, or several at once. A JSON "
+    "carries a whole request — title, style, lyrics, score and every parameter it "
+    "names — and an empty lyrics field in it means instrumental, so the box is "
+    "cleared. A score goes to the panel below; a prompt file fills the style box, "
+    "and the lyrics box too when it marks its lyrics with a heading or with "
+    "[Section] tags."
+)
+
+TOOLTIPS["tip-drop-overwrite"] = (
+    "On, a dropped file replaces what is in the boxes. That is usually what you "
+    "want: a preset fills every box at startup, so without this a drop lands "
+    "nowhere. Off, only empty boxes are filled and work in progress is safe."
 )

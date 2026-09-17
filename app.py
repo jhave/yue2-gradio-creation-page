@@ -159,25 +159,105 @@ def abc_title(abc_text):
     return ""
 
 
-def load_dropped_files(files, current_title, current_style, current_lyrics, current_abc):
+# request.json nests the sampling settings; the sliders are flat. One map, used
+# in both directions of reading, so a file written by this studio round-trips.
+_REQUEST_TO_PARAM = {
+    ("abc_sampling", "temperature"): "score_temp",
+    ("abc_sampling", "top_p"): "score_top_p",
+    ("abc_sampling", "repetition_penalty"): "score_rep_pen",
+    ("abc_sampling", "top_k"): "score_top_k",
+    ("abc_sampling", "penalty_window"): "score_pen_win",
+    ("semantic_sampling", "temperature"): "sem_temp",
+    ("semantic_sampling", "top_p"): "sem_top_p",
+    ("semantic_sampling", "repetition_penalty"): "rep_pen",
+    ("semantic_sampling", "top_k"): "sem_top_k",
+    ("semantic_sampling", "penalty_window"): "sem_pen_win",
+    ("semantic_sampling", "min_tokens"): "sem_min_tokens",
+    ("semantic_sampling", "max_tokens"): "sem_max_tokens",
+}
+
+# Top-level keys that are parameters rather than text. `cot` is what the model
+# library calls it; `cot_mode` is what a preset calls it. `ode_steps` is the
+# pipeline's name for flow steps.
+_REQUEST_TOP_PARAM = {
+    "seed": "seed", "cfg_scale": "cfg_scale",
+    "cot": "cot_mode", "cot_mode": "cot_mode",
+    "flow_steps": "flow_steps", "ode_steps": "flow_steps",
+}
+
+
+def parse_request_json(text):
+    """
+    A request.json (or a preset, or a track.json) into (fields, params).
+
+    `fields` holds only the keys the file actually names, so an absent key
+    leaves its box alone while `"lyrics": ""` deliberately empties it — that
+    is how an instrumental says it is one.
+    """
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("expected a JSON object at the top level")
+
+    fields, params = {}, {}
+
+    for key, dest in (("id", "title"), ("title", "title"), ("track_title", "title"),
+                      ("style", "style"), ("lyrics", "lyrics"), ("abc", "abc")):
+        if key in data and data[key] is not None:
+            fields.setdefault(dest, str(data[key]))
+
+    for key, pkey in _REQUEST_TOP_PARAM.items():
+        if key in data and data[key] is not None:
+            params[pkey] = data[key]
+
+    for (block, key), pkey in _REQUEST_TO_PARAM.items():
+        section = data.get(block)
+        if isinstance(section, dict) and section.get(key) is not None:
+            params[pkey] = section[key]
+
+    # track.json and presets keep a flat dict already keyed the way the sliders are.
+    flat = data.get("parameters")
+    if isinstance(flat, dict):
+        for pkey in PARAM_KEYS:
+            if flat.get(pkey) is not None:
+                params[pkey] = flat[pkey]
+    for pkey in PARAM_KEYS:
+        if data.get(pkey) is not None:
+            params[pkey] = data[pkey]
+
+    coerced = {}
+    for pkey, value in params.items():
+        cast = PARAM_CASTS.get(pkey, str)
+        try:
+            coerced[pkey] = cast(value) if cast is not str else str(value).strip()
+        except (TypeError, ValueError):
+            pass
+    return fields, coerced
+
+
+def load_dropped_files(files, current_title, current_style, current_lyrics,
+                       current_abc, overwrite=True):
     """
     Read dropped or chosen files into the right fields.
 
+      *.json             -> a whole request: title, style, lyrics, score, sliders
       *.abc, *.abc.txt   -> the score panel, and the panel opens
       *.md, *.txt        -> style prompt, plus lyrics when the file marks them
 
-    An empty field is filled; a field you have already written in is left alone,
-    so dropping a score onto a session in progress cannot silently discard a
-    prompt. The track title is taken from the ABC's T: field, or the filename.
+    With `overwrite` on, a dropped file wins over what is in the boxes. It has
+    to: a preset is loaded into every box at startup, so "fill only the empty
+    ones" meant a drop landed nowhere. Turn it off to protect work in progress.
+    The track title is taken from the JSON id, the ABC T: field, or the filename.
     """
+    blank_params = [gr.update() for _ in PARAM_KEYS]
     if not files:
-        return (gr.update(), gr.update(), gr.update(), gr.update(),
-                gr.update(), "")
+        return tuple([gr.update(), gr.update(), gr.update(), gr.update(),
+                      gr.update(), ""] + blank_params)
 
     paths = [Path(f if isinstance(f, str) else getattr(f, "name", str(f)))
              for f in (files if isinstance(files, list) else [files])]
 
     new_abc, new_style, new_lyrics, title_from = None, None, None, ""
+    new_params = {}
     read, skipped = [], []
 
     for path in paths:
@@ -192,7 +272,31 @@ def load_dropped_files(files, current_title, current_style, current_lyrics, curr
                   or path.name.lower().endswith(".abc.txt")
                   or bool(re.match(r"^\s*X:\s*\d", text)))
 
-        if is_abc:
+        if path.suffix.lower() == ".json":
+            try:
+                fields, params = parse_request_json(text)
+            except (ValueError, json.JSONDecodeError) as exc:
+                skipped.append(f"{path.name} (not readable JSON: {exc})")
+                continue
+            if "abc" in fields:
+                new_abc = fields["abc"].strip()
+            if "style" in fields:
+                new_style = fields["style"].strip()
+            if "lyrics" in fields:
+                # Present but empty is a statement, not an omission: instrumental.
+                new_lyrics = fields["lyrics"].strip()
+            if "title" in fields and fields["title"].strip():
+                title_from = fields["title"].strip()
+            new_params.update(params)
+            landed = [n for n, v in (("title", "title" in fields),
+                                     ("style", "style" in fields),
+                                     ("lyrics", "lyrics" in fields),
+                                     ("score", "abc" in fields)) if v]
+            if params:
+                landed.append(f"{len(params)} parameter"
+                              f"{'s' if len(params) != 1 else ''}")
+            read.append(f"`{path.name}` → " + (" + ".join(landed) or "nothing recognisable"))
+        elif is_abc:
             new_abc = text.strip()
             title_from = abc_title(new_abc) or path.stem.replace(".abc", "")
             read.append(f"`{path.name}` → score")
@@ -205,13 +309,13 @@ def load_dropped_files(files, current_title, current_style, current_lyrics, curr
             where = " + ".join(w for w, v in (("style", style), ("lyrics", lyrics)) if v)
             read.append(f"`{path.name}` → {where or 'nothing recognisable'}")
         else:
-            skipped.append(f"{path.name} (not .abc, .md or .txt)")
+            skipped.append(f"{path.name} (not .json, .abc, .md or .txt)")
 
     def fill(new, current):
-        """New text wins over an empty box; an occupied box is left alone."""
+        """New text wins unless the box is occupied and overwrite is off."""
         if new is None:
             return gr.update(), False
-        if (current or "").strip():
+        if not overwrite and (current or "").strip():
             return gr.update(), True
         return gr.update(value=new), False
 
@@ -220,8 +324,11 @@ def load_dropped_files(files, current_title, current_style, current_lyrics, curr
     lyrics_u, lyrics_kept = fill(new_lyrics, current_lyrics)
 
     title_u = gr.update()
-    if title_from and not (current_title or "").strip():
+    if title_from and (overwrite or not (current_title or "").strip()):
         title_u = gr.update(value=sanitize_song_id(title_from))
+
+    param_u = [gr.update(value=new_params[k]) if k in new_params else gr.update()
+               for k in PARAM_KEYS]
 
     panel_u = gr.update(open=True) if new_abc is not None else gr.update()
 
@@ -232,12 +339,16 @@ def load_dropped_files(files, current_title, current_style, current_lyrics, curr
                            ("score", abc_kept)) if k]
     if kept:
         joined = kept[0] if len(kept) == 1 else ", ".join(kept[:-1]) + " and " + kept[-1]
-        msg.append(f"Kept the existing {joined} — clear the box and drop again "
-                   f"to replace.")
+        msg.append(f"Kept the existing {joined} — tick **replace** and drop again "
+                   f"to overwrite.")
+    if new_params:
+        msg.append("Set " + ", ".join(
+            f"{PARAM_LABELS.get(k, k)} {new_params[k]}" for k in PARAM_KEYS
+            if k in new_params) + ".")
     if skipped:
         msg.append("Skipped " + ", ".join(skipped) + ".")
 
-    return title_u, style_u, lyrics_u, abc_u, panel_u, " ".join(msg)
+    return tuple([title_u, style_u, lyrics_u, abc_u, panel_u, " ".join(msg)] + param_u)
 
 
 # ==================== PERSISTENT & FACTORY PRESETS ====================
@@ -272,6 +383,7 @@ PARAM_SPEC = [
 ]
 PARAM_KEYS = [k for k, _, _ in PARAM_SPEC]
 PARAM_DEFAULTS = {k: d for k, d, _ in PARAM_SPEC}
+PARAM_CASTS = {k: t for k, _, t in PARAM_SPEC}
 
 
 def param_value(preset, key):
@@ -1109,7 +1221,7 @@ def load_track_notes(track_name):
     return read_track_metadata(Path("outputs") / track_name).get("notes", "")
 
 
-PLAYLIST_DIR = Path("docs")
+PLAYLIST_DIR = Path("outputs") / "favorites_page"
 
 
 def _to_mp3(flac_path, dest, bitrate="320k"):
@@ -1137,155 +1249,26 @@ PLAYLIST_TEMPLATE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
 <style>
-  :root {
-    color-scheme: light dark;
-    --ink: #18181b;
-    --muted: #71717a;
-    --line: #e4e4e7;
-    --bg: #fbfbfc;
-    --accent: #7c3aed;
-    --card-bg: rgba(124, 58, 237, 0.035);
-  }
+  :root { --ink:#18181b; --muted:#71717a; --line:#e4e4e7; --bg:#fbfbfc; --accent:#7c3aed; }
   @media (prefers-color-scheme: dark) {
-    :root {
-      --ink: #ededf0;
-      --muted: #a1a1aa;
-      --line: #2a2a31;
-      --bg: #151518;
-      --accent: #a78bfa;
-      --card-bg: rgba(167, 139, 250, 0.05);
-    }
+    :root { --ink:#ededf0; --muted:#a1a1aa; --line:#2a2a31; --bg:#151518; --accent:#a78bfa; }
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--ink);
-    font: 15px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  }
-  .wrap { max-width: 760px; margin: 0 auto; padding: 40px 20px 96px; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.65 ui-sans-serif,-apple-system,"Helvetica Neue",sans-serif; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 48px 20px 96px; }
+  h1 { font-size: 1.7rem; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 0.88rem; margin: 0 0 36px; }
 
-  .hero-img {
-    width: 100%;
-    height: auto;
-    border-radius: 12px;
-    border: 1px solid var(--line);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
-    display: block;
-    margin: 0 0 32px;
-  }
-
-  h1 { font-size: 1.85rem; font-weight: 750; margin: 0 0 6px; letter-spacing: -0.02em; }
-  .sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 32px; }
-
-  .intro { margin: 0 0 44px; }
-  .intro p { margin: 0 0 16px; line-height: 1.75; font-size: 1.02rem; }
-  .intro h2 { font-size: 1.3rem; font-weight: 700; margin: 36px 0 14px; letter-spacing: -0.01em; color: var(--ink); }
-  .intro h3 { font-size: 1.1rem; font-weight: 650; margin: 26px 0 10px; color: var(--ink); }
-  .intro blockquote {
-    margin: 22px 0;
-    padding: 14px 18px;
-    border-left: 3px solid var(--accent);
-    background: var(--card-bg);
-    border-radius: 0 8px 8px 0;
-    color: var(--ink);
-    font-size: 0.94rem;
-    line-height: 1.65;
-  }
-  .intro blockquote p { margin: 0 0 8px; font-size: 0.94rem; }
-  .intro blockquote p:last-child { margin-bottom: 0; }
-  .intro blockquote cite { display: block; margin-top: 10px; font-size: 0.8rem; color: var(--muted); font-style: normal; font-weight: 600; }
-  .intro ul { margin: 12px 0 20px 20px; padding: 0; }
-  .intro li { margin-bottom: 10px; line-height: 1.65; font-size: 0.98rem; }
-  .intro a { color: var(--accent); text-decoration: none; font-weight: 500; }
-  .intro a:hover { text-decoration: underline; }
-
-  .stat-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
-    margin: 24px 0 28px;
-  }
-  @media (max-width: 680px) {
-    .stat-grid { grid-template-columns: 1fr; }
-  }
-  .stat-card {
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 14px 16px;
-    background: var(--card-bg);
-  }
-  .stat-card .num {
-    font-size: 1.18rem;
-    font-weight: 700;
-    color: var(--accent);
-    font-variant-numeric: tabular-nums;
-  }
-  .stat-card .num a {
-    color: var(--accent);
-    text-decoration: none;
-  }
-  .stat-card .num a:hover {
-    text-decoration: underline;
-  }
-  .stat-card .lbl {
-    font-size: 0.8rem;
-    color: var(--muted);
-    margin-top: 4px;
-    line-height: 1.4;
-  }
-  .stat-card .lbl a {
-    color: inherit;
-    text-decoration: none;
-  }
-  .stat-card .lbl a:hover {
-    color: var(--accent);
-    text-decoration: underline;
-  }
-
-  .playlist-divider {
-    border-top: 2px solid var(--line);
-    margin: 48px 0 28px;
-    padding-top: 24px;
-  }
-  .playlist-divider h2 {
-    font-size: 1.4rem;
-    font-weight: 750;
-    margin: 0 0 6px;
-    letter-spacing: -0.01em;
-  }
-  .playlist-divider p {
-    color: var(--muted);
-    font-size: 0.88rem;
-    margin: 0;
-  }
+  /* ---- EDIT ME: intro text ---- */
+  .intro { margin: 0 0 40px; }
+  .intro p { margin: 0 0 14px; }
 
   .track { border-top: 1px solid var(--line); padding: 26px 0; }
-  .track h2 { font-size: 1.08rem; font-weight: 650; margin: 0 0 2px; }
+  .track h2 { font-size: 1.06rem; font-weight: 650; margin: 0 0 2px; }
   .meta { color: var(--muted); font-size: 0.8rem; margin: 0 0 12px; }
   .meta span + span::before { content: " · "; }
-
-  /* Refined MP3 Player Styling */
-  audio {
-    width: 100%;
-    height: 38px;
-    margin: 8px 0 14px;
-    border-radius: 20px;
-    accent-color: var(--accent);
-    background: var(--card-bg);
-    border: 1px solid var(--line);
-    outline: none;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-  }
-  audio:hover, audio:focus {
-    border-color: var(--accent);
-    box-shadow: 0 2px 10px rgba(124, 58, 237, 0.12);
-  }
-  audio::-webkit-media-controls-panel,
-  audio::-webkit-media-controls-enclosure {
-    background: transparent;
-  }
+  audio { width: 100%; margin: 6px 0 12px; }
   .note { margin: 10px 0 0; }
   .note:empty { display: none; }
   details { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px;
@@ -1308,8 +1291,6 @@ PLAYLIST_TEMPLATE = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-
-<img class="hero-img" src="img/suno-shit-header.jpg" alt="Suno v.6 is a pile of shit — that's good news for experimental music" width="1920" height="1080">
 
 <h1>__TITLE__</h1>
 <p class="sub">__SUBTITLE__</p>
@@ -2300,14 +2281,18 @@ with gr.Blocks(title="YuE2 Studio") as demo:
 
             # Scores and prompts written elsewhere come in here. Pasting into the
             # boxes works as it always did; this is for the files.
-            with gr.Accordion("Open files — drop a .abc score or a prompt.md",
+            with gr.Accordion("Open files — drop a request.json, a .abc score or a prompt.md",
                               open=False, elem_classes=["drop-panel"]):
                 dropped_files = gr.File(
-                    label="Drag .abc, .md or .txt here, or click to choose",
+                    label="Drag .json, .abc, .md or .txt here, or click to choose",
                     file_count="multiple",
-                    file_types=[".abc", ".md", ".txt"],
+                    file_types=[".json", ".abc", ".md", ".txt"],
                     height=110,
                     elem_id="tip-drop"
+                )
+                drop_overwrite = gr.Checkbox(
+                    value=True, label="replace boxes that already have text",
+                    elem_id="tip-drop-overwrite", container=False
                 )
                 drop_status = gr.Markdown("", elem_classes=["toolbar-status-inline"])
 
@@ -2885,9 +2870,10 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     # ------------------------------------------------------------ file intake
     dropped_files.upload(
         load_dropped_files,
-        inputs=[dropped_files, custom_title, style_input, lyrics_input, abc_editor],
+        inputs=[dropped_files, custom_title, style_input, lyrics_input, abc_editor,
+                drop_overwrite],
         outputs=[custom_title, style_input, lyrics_input, abc_editor,
-                 score_panel, drop_status]
+                 score_panel, drop_status] + PARAM_COMPONENTS
     ).then(
         None, inputs=[abc_editor],
         js="(abc) => { setTimeout(() => window.renderSheetMusic(abc), 200); }"
