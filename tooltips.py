@@ -110,9 +110,19 @@ TOOLTIPS = {
 # Added with the P0 consolidation: the three generate actions used to be four
 # buttons, two of which called the same function with the same arguments.
 TOOLTIPS.update({
-    "tip-generate": "Score then audio, in one pass, with the settings as they stand. "
-                    "This is the button for making a song; the other two exist for "
-                    "when you want to intervene between the two stages.",
+    "tip-generate": "Plans a NEW score and renders it. Whatever is in the score panel "
+                    "below is overwritten — if you imported or hand-edited ABC, use "
+                    "Render the score below instead.",
+    "tip-render-score": "Stages 2 and 3 on exactly the ABC in the panel below, imports and "
+                        "hand edits included. No new score is planned, so the Stage 1 "
+                        "sliders and Score Mode have nothing to act on and the ~3 minute "
+                        "planning stage is skipped.",
+    "tip-preview": "The opening 20 seconds of the score in the panel, at 8 flow steps. "
+                   "The score is cut first, which is what makes it quick: the "
+                   "token-generation stage costs in proportion to the score it is "
+                   "given. Saved under its own __preview folder; the full score is "
+                   "left untouched.",
+
     "tip-plan": "Stage 1 only, about 20 seconds: writes the ABC score into the panel "
                 "below and stops. Edit it there, then press Synthesize from this score.",
     "tip-synth-score": "Stage 2 and 3 on whatever ABC is in the panel below — including "

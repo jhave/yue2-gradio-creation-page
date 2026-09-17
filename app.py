@@ -111,6 +111,138 @@ def parse_abc_metrics(abc_text: str) -> str:
     return "\n".join(lines)
 
 
+# ==================== PREVIEW ====================
+# Committing 30 minutes to hear whether a score works is the wrong trade. A
+# preview renders the opening 20 seconds at the cheapest flow setting: the AR
+# stage is the expensive one and it scales with how much score it is given, so
+# cutting the score is what makes this fast, not cutting the solver.
+
+PREVIEW_SECONDS = 20.0
+PREVIEW_FLOW_STEPS = 8
+
+_VOICE_RE = re.compile(r"^V:\s*(\S+)")
+_METER_RE = re.compile(r"^M:\s*(\d+)/(\d+)")
+_MULTIREST_RE = re.compile(r"^\s*Z(\d*)\s*$")
+
+
+def _bar_seconds(meter, tempo):
+    """Seconds per bar. 6/4 at 120 is 3.0s; 7/8 is 1.75s; 9/8 is 2.25s."""
+    num, den = meter
+    return (60.0 / tempo) * num * (4.0 / den)
+
+
+def _bars_in(token):
+    """`Z3` is three bars of rest in one token; everything else is one bar."""
+    m = _MULTIREST_RE.match(token.replace("|", ""))
+    return int(m.group(1) or 1) if m else 1
+
+
+def _tokens_of(line):
+    """A bar line into its bars, each keeping its trailing '|'."""
+    return [t + "|" for t in line.split("|") if t.strip()]
+
+
+def split_abc(abc_text):
+    """
+    The score into (header, blocks). A block is one V: section: the voice line,
+    any mid-stream M:, and its bar tokens, with the % section marker above it.
+    """
+    lines = abc_text.splitlines()
+    k = -1
+    for i, l in enumerate(lines):
+        if l.strip().startswith("K:"):
+            k = i
+            break
+    head, body = (lines[:k + 1], lines[k + 1:]) if k >= 0 else ([], lines)
+
+    blocks, cur, pre = [], None, []
+    for line in body:
+        s = line.strip()
+        if s.startswith("%"):
+            pre.append(line)
+            continue
+        m = _VOICE_RE.match(s)
+        if m:
+            if cur:
+                blocks.append(cur)
+            cur = {"pre": pre, "voice": m.group(1), "head": [line], "bars": []}
+            pre = []
+            continue
+        if cur is None:
+            head.append(line)
+            continue
+        if _METER_RE.match(s):
+            cur["head"].append(line)
+        elif "|" in s:
+            cur["bars"].extend(_tokens_of(line))
+        else:
+            cur["head"].append(line)
+    if cur:
+        blocks.append(cur)
+    return head, blocks
+
+
+def _measure_blocks(blocks, head_meter, tempo):
+    """Give every block its meter and duration, following mid-stream M: changes."""
+    meters = {}
+    for b in blocks:
+        for l in b["head"]:
+            m = _METER_RE.match(l.strip())
+            if m:
+                meters[b["voice"]] = (int(m.group(1)), int(m.group(2)))
+        b["meter"] = meters.get(b["voice"], head_meter)
+        b["bar_sec"] = _bar_seconds(b["meter"], tempo)
+        b["seconds"] = sum(_bars_in(t) for t in b["bars"]) * b["bar_sec"]
+
+
+def truncate_abc(abc_text, seconds=PREVIEW_SECONDS):
+    """
+    The opening `seconds` of a score, cut at a bar line.
+
+    Voices share one timeline but not one block length — a voice resting under
+    another writes `Z3|`, three bars in a single token — so each voice is cut
+    at its own bar that crosses `seconds`, not at a matching token count.
+
+    Returns (abc, kept_seconds, whole_seconds).
+    """
+    if not (abc_text or "").strip():
+        return abc_text, 0.0, 0.0
+
+    tm = re.search(r"Q:1/4=(\d+)", abc_text)
+    tempo = int(tm.group(1)) if tm else 120
+    head, blocks = split_abc(abc_text)
+    hm = _METER_RE.search("\n".join(head)) or re.search(r"^M:\s*(\d+)/(\d+)", abc_text, re.M)
+    head_meter = (int(hm.group(1)), int(hm.group(2))) if hm else (4, 4)
+    _measure_blocks(blocks, head_meter, tempo)
+
+    voices = {b["voice"] for b in blocks}
+    totals = {v: sum(b["seconds"] for b in blocks if b["voice"] == v) for v in voices}
+    whole = max(totals.values()) if totals else 0.0
+    if whole <= seconds:
+        return abc_text, whole, whole
+
+    out = list(head)
+    elapsed = {v: 0.0 for v in voices}
+    for b in blocks:
+        v = b["voice"]
+        if all(e >= seconds for e in elapsed.values()):
+            break
+        if elapsed[v] >= seconds:
+            continue
+        take = []
+        for tok in b["bars"]:
+            if elapsed[v] >= seconds:
+                break
+            take.append(tok)
+            elapsed[v] += _bars_in(tok) * b["bar_sec"]
+        if not take:
+            continue
+        out.extend(b["pre"])
+        out.extend(b["head"])
+        out.append("".join(take))
+    return "\n".join(out) + "\n", max(elapsed.values()), whole
+
+
 # ==================== DROPPED FILES ====================
 # Scores and prompts written elsewhere — a .abc from notation software, a
 # prompt.md from a text editor — go in by drag and drop or by paste. The
@@ -2009,6 +2141,40 @@ def synthesize_audio_step(style, lyrics, abc_text, seed, ode_steps,
     return audio_path, status_msg, folder_name
 
 
+def preview_audio_step(style, lyrics, abc_text, seed, ode_steps,
+                       sem_temp, sem_top_p, rep_pen, cfg_scale, track_title,
+                       preset_name="",
+                       score_temp=0.75, score_top_p=0.90,
+                       score_rep_pen=SCORE_REP_PEN_DEFAULT,
+                       sem_top_k=100, sem_pen_win=50,
+                       sem_min_tokens=200, sem_max_tokens=9000,
+                       score_top_k=30, score_pen_win=100, cot_mode="full",
+                       append_tag=True, audio_format=DEFAULT_AUDIO_FORMAT,
+                       progress=gr.Progress()):
+    """
+    The opening 20 seconds, at the cheapest flow setting.
+
+    Same arguments as synthesize_audio_step so the two share one input list.
+    The score is cut first: the AR stage dominates the clock and its cost
+    follows the length of the score it is given.
+    """
+    if not (abc_text or "").strip():
+        return None, "Nothing to preview — write a score first, or drop one in.", ""
+
+    short, kept, whole = truncate_abc(abc_text, PREVIEW_SECONDS)
+    title = f"{(track_title or 'preview').strip()}__preview"
+    audio, status, folder = synthesize_audio_step(
+        style, lyrics, short, seed, PREVIEW_FLOW_STEPS,
+        sem_temp, sem_top_p, rep_pen, cfg_scale, title, preset_name,
+        score_temp, score_top_p, score_rep_pen, sem_top_k, sem_pen_win,
+        sem_min_tokens, sem_max_tokens, score_top_k, score_pen_win, cot_mode,
+        append_tag, audio_format, progress=progress
+    )
+    note = (f"Preview: first **{kept:.0f}s** of **{whole:.0f}s**, "
+            f"{PREVIEW_FLOW_STEPS} flow steps. The full score is untouched.")
+    return audio, f"{note}\n\n{status}", folder
+
+
 def one_click_generate_step(style, lyrics, custom_title,
                             score_temp, score_top_p, score_rep_pen, score_top_k, score_pen_win,
                             sem_temp, sem_top_p, rep_pen, sem_top_k, sem_pen_win,
@@ -2539,18 +2705,34 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                     # "Synthesize Audio" here and "Synthesize Audio from this
                     # Score" on the score tab — the last two called the same
                     # function with the same arguments.
-                    generate_btn = gr.Button("Generate song", size="lg",
+                    # Two ways to reach audio, each saying which score it uses.
+                    # "Generate song" plans a new one and overwrites the panel;
+                    # the label used to leave that to be discovered.
+                    generate_btn = gr.Button("Generate song  ·  writes a new score",
+                                             size="lg",
                                              elem_classes=["btn-primary", "btn-hero"],
                                              elem_id="tip-generate")
+                    render_score_btn = gr.Button(
+                        "Render the score below  ·  keeps it as written",
+                        size="lg", interactive=False,
+                        elem_classes=["btn-hero", "btn-hero-alt"],
+                        elem_id="tip-render-score"
+                    )
                     with gr.Row():
                         plan_btn = gr.Button("Write score only  ·  ~20s", size="sm",
                                              elem_classes=["btn-secondary"], elem_id="tip-plan")
+                        preview_btn = gr.Button("Preview 20s", size="sm", interactive=False,
+                                                elem_classes=["btn-secondary"],
+                                                elem_id="tip-preview")
                         stop_btn = gr.Button("Stop", variant="stop", size="sm", scale=0,
                                              min_width=96, elem_classes=["nowrap-btn"],
                                              elem_id="tip-stop")
 
-                    studio_status = gr.Markdown("")
-                    audio_output = gr.Audio(label="Result", type="filepath")
+                    # One place audio appears, whichever button produced it. The
+                    # score panel used to hold a second player and a second status
+                    # line, so a render started there reported nowhere visible.
+                    studio_status = gr.Markdown("", elem_classes=["render-status"])
+                    audio_output = gr.Audio(label="Rendered audio", type="filepath")
                     with gr.Row(elem_classes=["field-header-row"]):
                         gr.Markdown("rate:", elem_classes=["toggle-row-label"])
                         studio_rating = gr.Radio(
@@ -2569,17 +2751,12 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                             language="markdown", lines=16, max_lines=26, value=""
                         )
                         with gr.Row():
-                            render_from_score_btn = gr.Button(
-                                "Synthesize from this score", size="sm",
-                                elem_classes=["btn-primary"], elem_id="tip-synth-score"
-                            )
-                            render_sheet_btn = gr.Button("Re-render staves", size="sm",
+                            render_sheet_btn = gr.Button("Draw the staves", size="sm",
                                                          elem_classes=["btn-secondary"])
+                            sheet_state = gr.Markdown("", elem_classes=["sheet-state"])
                         metrics_display = gr.Markdown(
                             "*Write a score, or paste ABC above, to see section timings.*"
                         )
-                        score_synth_status = gr.Markdown("")
-                        score_audio_output = gr.Audio(label="Rendered from score", type="filepath")
                     with gr.Column(scale=5):
                         sheet_html = gr.HTML(
                             '<div id="sheet-music-paper">'
@@ -2965,9 +3142,45 @@ with gr.Blocks(title="YuE2 Studio") as demo:
         append_tag_check, audio_format_dd
     ]
 
+    # While a render runs, every button that would start another one is dead.
+    # They used to stay lit, so a second press queued a second render behind the
+    # first with no sign that it had.
+    ACTIONS = [generate_btn, render_score_btn, plan_btn, preview_btn]
+
+    def lock_actions():
+        return [gr.update(interactive=False)] * len(ACTIONS)
+
+    def unlock_actions(abc_text):
+        """Back on afterwards — except the two that need a score, if there is none."""
+        has_score = bool((abc_text or "").strip())
+        return [gr.update(interactive=True), gr.update(interactive=has_score),
+                gr.update(interactive=True), gr.update(interactive=has_score)]
+
+    STAVES_CURRENT = "<span class='sheet-ok'>staves match the ABC</span>"
+    STAVES_STALE = "<span class='sheet-stale'>ABC changed — press Draw the staves</span>"
+    STAVES_NONE = ""
+
+    def staves_mark(abc_text):
+        return STAVES_CURRENT if (abc_text or "").strip() else STAVES_NONE
+
+    def score_buttons(abc_text):
+        """The two buttons that act on the panel's ABC, and the staves marker."""
+        has_score = bool((abc_text or "").strip())
+        return (gr.update(interactive=has_score), gr.update(interactive=has_score),
+                STAVES_STALE if has_score else STAVES_NONE)
+
+    # Typing in the panel, or a file landing in it, puts the staves out of date
+    # and enables the two buttons that need a score to act on.
+    abc_editor.change(
+        score_buttons, inputs=[abc_editor],
+        outputs=[render_score_btn, preview_btn, sheet_state]
+    )
+
     # Score, then audio, in one pass. The score lands in the panel below and the
     # staves are drawn, so the run leaves evidence of how it got there.
     generate_btn.click(
+        lock_actions, outputs=ACTIONS
+    ).then(
         one_click_generate_step,
         inputs=([style_input, lyrics_input, custom_title] + PARAM_COMPONENTS
                 + [append_tag_check, audio_format_dd, preset_dropdown]),
@@ -2976,11 +3189,17 @@ with gr.Blocks(title="YuE2 Studio") as demo:
         reveal_rating, inputs=[last_render_state], outputs=[studio_rating]
     ).then(
         None, inputs=[abc_editor], js="(abc) => { window.renderSheetMusic(abc); }"
+    ).then(
+        staves_mark, inputs=[abc_editor], outputs=[sheet_state]
+    ).then(
+        unlock_actions, inputs=[abc_editor], outputs=ACTIONS
     )
 
     # Stage 1 only. Opening the panel is the point: this output used to be
     # written to a tab the user was not on.
     plan_btn.click(
+        lock_actions, outputs=ACTIONS
+    ).then(
         generate_plan_step,
         inputs=[
             style_input, lyrics_input, seed_input,
@@ -2992,15 +3211,38 @@ with gr.Blocks(title="YuE2 Studio") as demo:
         lambda: gr.update(open=True), outputs=[score_panel]
     ).then(
         None, inputs=[abc_editor], js="(abc) => { setTimeout(() => window.renderSheetMusic(abc), 200); }"
+    ).then(
+        staves_mark, inputs=[abc_editor], outputs=[sheet_state]
+    ).then(
+        unlock_actions, inputs=[abc_editor], outputs=ACTIONS
     )
 
-    # Stages 2 and 3 on whatever ABC is in the panel, hand edits included.
-    render_from_score_btn.click(
+    # Stages 2 and 3 on whatever ABC is in the panel, hand edits included. Its
+    # audio and its status go to the one player above, not to a second one
+    # hidden inside the panel.
+    render_score_btn.click(
+        lock_actions, outputs=ACTIONS
+    ).then(
         synthesize_audio_step,
         inputs=render_inputs,
-        outputs=[score_audio_output, score_synth_status, last_render_state]
+        outputs=[audio_output, studio_status, last_render_state]
     ).then(
         reveal_rating, inputs=[last_render_state], outputs=[studio_rating]
+    ).then(
+        unlock_actions, inputs=[abc_editor], outputs=ACTIONS
+    )
+
+    # The opening 20 seconds, cheap, to hear whether the score is worth the wait.
+    preview_btn.click(
+        lock_actions, outputs=ACTIONS
+    ).then(
+        preview_audio_step,
+        inputs=render_inputs,
+        outputs=[audio_output, studio_status, last_render_state]
+    ).then(
+        reveal_rating, inputs=[last_render_state], outputs=[studio_rating]
+    ).then(
+        unlock_actions, inputs=[abc_editor], outputs=ACTIONS
     )
 
     stop_btn.click(request_cancel, outputs=[studio_status])
@@ -3027,6 +3269,8 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     # Staves redraw on demand, not on every keystroke: engraving a full score is
     # expensive and the ABC text is authoritative either way.
     render_sheet_btn.click(
+        staves_mark, inputs=[abc_editor], outputs=[sheet_state]
+    ).then(
         None, inputs=[abc_editor], js="(abc) => { window.renderSheetMusic(abc); }"
     )
 

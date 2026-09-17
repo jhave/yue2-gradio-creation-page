@@ -509,8 +509,8 @@ div.toolbar-label {
     color: #0f172a !important;
     padding: 18px !important;
     border-radius: 10px !important;
-    min-height: 320px;
-    max-height: 640px;
+    min-height: 620px;
+    max-height: 1400px;
     overflow: auto !important;
     border: 1px solid var(--border);
     box-shadow: var(--shadow);
@@ -560,3 +560,27 @@ button.yue-tip-target { text-decoration: none !important; }
 .now-playing p { margin: 0 !important; }
 .np-on { color: var(--accent, #8b5cf6); font-weight: 700; }
 .np-idle { opacity: 0.5; font-style: italic; }
+
+
+/* ------------------------------------------------- staves state and actions */
+.sheet-state       { margin: 0 !important; font-size: 0.78rem !important;
+                     align-self: center; }
+.sheet-state p     { margin: 0 !important; }
+.sheet-ok          { color: var(--ok, #16a34a); }
+.sheet-stale       { color: var(--warn, #d97706); }
+
+/* The second hero button: same size as Generate, visibly not the default. */
+.btn-hero-alt button, button.btn-hero-alt {
+    background: transparent !important;
+    color: var(--accent) !important;
+    border: 1.5px solid var(--accent) !important;
+    margin-top: 6px;
+}
+.btn-hero-alt button:disabled, button.btn-hero-alt:disabled {
+    opacity: 0.4 !important;
+    border-color: var(--border) !important;
+    color: var(--muted) !important;
+}
+
+/* One status line for every render, directly above the one player. */
+.render-status     { font-size: 0.85rem !important; min-height: 1.2em; }
