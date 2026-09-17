@@ -593,6 +593,274 @@ FACTORY_PRESETS = {
 _DELETE_CONFIRM_TARGET = None
 
 
+# ==================== SOUNDS AND SONGS ====================
+# A preset used to hold two unrelated things: a sound (the 16 parameters) and a
+# song (title, prompt, lyrics, score). Saving a lyric therefore re-saved the
+# parameters, every piece became a preset, and the list grew without bound.
+# They are now two lists, chosen independently, so any sound can play any song —
+# and a rating can be attributed to one or the other instead of to a bundle in
+# which everything varied at once.
+
+SOUNDS_FILE = Path("sounds.json")
+SONGS_FILE = Path("songs.json")
+
+SONG_KEYS = ["custom_title", "style", "lyrics", "abc"]
+
+FACTORY_SOUNDS = {"Studio default": dict(PARAM_DEFAULTS)}
+FACTORY_SONGS = {
+    name: {k: v for k, v in entry.items() if k in SONG_KEYS}
+    for name, entry in FACTORY_PRESETS.items()
+}
+
+
+def _read_json_dict(path):
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _sound_signature(entry):
+    """Two sounds are the same sound when all 16 values agree."""
+    out = []
+    for key, default, caster in PARAM_SPEC:
+        try:
+            v = caster(entry.get(key, default))
+        except (TypeError, ValueError):
+            v = default
+        out.append(round(v, 4) if caster is float else v)
+    return tuple(out)
+
+
+def migrate_presets():
+    """
+    Split presets.json into sounds.json and songs.json, once.
+
+    presets.json is left on disk untouched. Sounds that are identical in all 16
+    values collapse into one, named after the first preset that used it — which
+    is the point of the split: many pieces, few sounds.
+    """
+    if SOUNDS_FILE.exists() or SONGS_FILE.exists():
+        return None
+    stored = _read_json_dict(PRESETS_FILE)
+    if not stored:
+        return None
+
+    sounds, songs, by_sig = {}, {}, {}
+    for name, entry in stored.items():
+        if not isinstance(entry, dict):
+            continue
+        sig = _sound_signature(entry)
+        if sig in by_sig:
+            sound_name = by_sig[sig]
+        else:
+            sound_name = name
+            by_sig[sig] = sound_name
+            sounds[sound_name] = {k: param_value(entry, k) for k in PARAM_KEYS}
+        song = {k: (entry.get(k) or "").strip() for k in SONG_KEYS if entry.get(k)}
+        if song:
+            song["sound"] = sound_name     # what it was rendered with, as a default
+            songs[name] = song
+
+    SOUNDS_FILE.write_text(json.dumps(sounds, indent=2, ensure_ascii=False), encoding="utf-8")
+    SONGS_FILE.write_text(json.dumps(songs, indent=2, ensure_ascii=False), encoding="utf-8")
+    return len(stored), len(sounds), len(songs)
+
+
+def load_sounds():
+    out = dict(FACTORY_SOUNDS)
+    out.update(_read_json_dict(SOUNDS_FILE))
+    return out
+
+
+def load_songs():
+    out = dict(FACTORY_SONGS)
+    out.update(_read_json_dict(SONGS_FILE))
+    return out
+
+
+def save_sounds_to_disk(d):
+    SOUNDS_FILE.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def save_songs_to_disk(d):
+    SONGS_FILE.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------- sounds
+
+def select_sound(name):
+    """Load the 16 values. A name not on the list leaves them alone."""
+    global _DELETE_CONFIRM_TARGET
+    _DELETE_CONFIRM_TARGET = None
+    clean = (name or "").strip()
+    sounds = load_sounds()
+    if clean in sounds:
+        return tuple(preset_params(sounds[clean]) + [f"Loaded sound **{clean}**.", clean])
+    status = f"New sound **{clean}** — Save to create it." if clean else ""
+    return tuple([gr.update() for _ in PARAM_SPEC] + [status, clean])
+
+
+def save_sound(name, *values):
+    clean = (name or "").strip()
+    if not clean:
+        return gr.update(), "Name the sound first.", gr.update(), gr.update()
+    if clean in FACTORY_SOUNDS:
+        clean = f"{clean} (my take)"
+    entry = {}
+    for (key, default, caster), value in zip(PARAM_SPEC, values):
+        try:
+            entry[key] = caster(value)
+        except (TypeError, ValueError):
+            entry[key] = default
+    entry["updated_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    stored = _read_json_dict(SOUNDS_FILE)
+    stored[clean] = entry
+    save_sounds_to_disk(stored)
+    return (gr.update(choices=list(load_sounds().keys()), value=clean),
+            f"Saved sound **{clean}**.", clean,
+            sound_button_state(clean, *values))
+
+
+def revert_sound(name):
+    clean = (name or "").strip()
+    width = len(PARAM_SPEC)
+    if clean not in load_sounds():
+        return tuple([gr.update()] * width + [f"**{clean}** was never saved.", clean])
+    res = list(select_sound(clean))
+    res[width] = f"Reverted sound **{clean}**."
+    return tuple(res)
+
+
+def sound_button_state(name, *values):
+    clean = (name or "").strip()
+    if not clean:
+        return gr.update(value="Name it", variant="secondary", interactive=False)
+    sounds = load_sounds()
+    if clean not in sounds:
+        return gr.update(value="Save as new", variant="primary", interactive=True)
+    same = _sound_signature(sounds[clean]) == _sound_signature(
+        dict(zip(PARAM_KEYS, values))
+    )
+    if same:
+        return gr.update(value="Saved", variant="secondary", interactive=False)
+    if clean in FACTORY_SOUNDS:
+        return gr.update(value="Save as copy", variant="primary", interactive=True)
+    return gr.update(value="Save changes", variant="primary", interactive=True)
+
+
+# ----------------------------------------------------------------------- songs
+
+def select_song(name):
+    """Load title, prompt, lyrics and score. A song may name the sound it came with."""
+    global _DELETE_CONFIRM_TARGET
+    _DELETE_CONFIRM_TARGET = None
+    clean = (name or "").strip()
+    songs = load_songs()
+    if clean in songs:
+        s = songs[clean]
+        title = (s.get("custom_title") or _slugify_title(clean)).strip()
+        return (gr.update(value=s.get("style", "")),
+                gr.update(value=s.get("lyrics", "")),
+                gr.update(value=title),
+                gr.update(value=s.get("abc", "")),
+                f"Loaded song **{clean}**.", clean)
+    status = f"New song **{clean}** — Save to create it." if clean else ""
+    title_u = gr.update(value=_slugify_title(clean)) if clean else gr.update()
+    return (gr.update(), gr.update(), title_u, gr.update(), status, clean)
+
+
+def save_song(name, custom_title, style, lyrics, abc):
+    clean = (name or "").strip()
+    if not clean:
+        return gr.update(), "Name the song first.", gr.update(), gr.update()
+    if clean in FACTORY_SONGS:
+        clean = f"{clean} (my take)"
+    entry = {
+        "custom_title": (custom_title or "").strip(),
+        "style": (style or "").strip(),
+        "lyrics": (lyrics or "").strip(),
+        "abc": (abc or "").strip(),
+        "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    stored = _read_json_dict(SONGS_FILE)
+    stored[clean] = entry
+    save_songs_to_disk(stored)
+    return (gr.update(choices=list(load_songs().keys()), value=clean),
+            f"Saved song **{clean}**.", clean,
+            song_button_state(clean, custom_title, style, lyrics, abc))
+
+
+def revert_song(name):
+    clean = (name or "").strip()
+    if clean not in load_songs():
+        return (gr.update(), gr.update(), gr.update(), gr.update(),
+                f"**{clean}** was never saved.", clean)
+    res = list(select_song(clean))
+    res[4] = f"Reverted song **{clean}**."
+    return tuple(res)
+
+
+def _song_signature(entry):
+    return tuple((entry.get(k) or "").strip() for k in SONG_KEYS)
+
+
+def song_button_state(name, custom_title, style, lyrics, abc):
+    clean = (name or "").strip()
+    if not clean:
+        return gr.update(value="Name it", variant="secondary", interactive=False)
+    songs = load_songs()
+    live = {"custom_title": custom_title, "style": style, "lyrics": lyrics, "abc": abc}
+    if clean not in songs:
+        return gr.update(value="Save as new", variant="primary", interactive=True)
+    if _song_signature(songs[clean]) == _song_signature(live):
+        return gr.update(value="Saved", variant="secondary", interactive=False)
+    if clean in FACTORY_SONGS:
+        return gr.update(value="Save as copy", variant="primary", interactive=True)
+    return gr.update(value="Save changes", variant="primary", interactive=True)
+
+
+# ------------------------------------------------------------------- deleting
+
+def _delete_from(path, factory, name, kind):
+    """Two presses to delete, and factory entries never."""
+    global _DELETE_CONFIRM_TARGET
+    clean = (name or "").strip()
+    token = f"{kind}:{clean}"
+    if not clean:
+        return gr.update(), f"No {kind} selected."
+    if clean in factory:
+        _DELETE_CONFIRM_TARGET = None
+        return gr.update(), f"**{clean}** is a factory {kind} and cannot be deleted."
+    stored = _read_json_dict(path)
+    if clean not in stored:
+        _DELETE_CONFIRM_TARGET = None
+        return gr.update(), f"No {kind} named **{clean}**."
+    if _DELETE_CONFIRM_TARGET != token:
+        _DELETE_CONFIRM_TARGET = token
+        return gr.update(), (f"Delete the {kind} **{clean}**? Press again to confirm, "
+                             f"or choose another to cancel.")
+    _DELETE_CONFIRM_TARGET = None
+    del stored[clean]
+    path.write_text(json.dumps(stored, indent=2, ensure_ascii=False), encoding="utf-8")
+    remaining = dict(factory)
+    remaining.update(stored)
+    choices = list(remaining.keys())
+    return (gr.update(choices=choices, value=choices[0] if choices else None),
+            f"Deleted the {kind} **{clean}**.")
+
+
+def delete_sound(name):
+    return _delete_from(SOUNDS_FILE, FACTORY_SOUNDS, name, "sound")
+
+
+def delete_song(name):
+    return _delete_from(SONGS_FILE, FACTORY_SONGS, name, "song")
+
+
 def load_all_presets():
     """Load all presets, guaranteeing FACTORY_PRESETS are always present and protected."""
     presets = dict(FACTORY_PRESETS)
@@ -1226,7 +1494,8 @@ PARAM_LABELS = {
 
 def write_track_metadata(output_dir, folder_name, track_title, preset_name,
                          style, lyrics, params, audio_path=None,
-                         elapsed=None, audio_seconds=None, favorite=False):
+                         elapsed=None, audio_seconds=None, favorite=False,
+                         song_name=""):
     """
     Write track.json beside the audio and, when mutagen is available, stamp the
     same values into the FLAC's Vorbis comments so the file carries them alone.
@@ -1239,10 +1508,16 @@ def write_track_metadata(output_dir, folder_name, track_title, preset_name,
         except (TypeError, ValueError):
             clean[key] = default
 
+    # `sound` and `song` are what the ratings are attributed to. `preset` stays,
+    # holding both, so every track written before the split still reads.
+    sound = (preset_name or "").strip()
+    song = (song_name or "").strip()
     meta = {
         "folder": folder_name,
         "track_title": (track_title or "").strip(),
-        "preset": (preset_name or "").strip(),
+        "sound": sound,
+        "song": song,
+        "preset": " / ".join([p for p in (sound, song) if p]) or sound,
         "created": datetime.datetime.now().isoformat(timespec="seconds"),
         "favorite": bool(favorite),
         "style": (style or "").strip(),
@@ -1777,7 +2052,7 @@ def save_favs_preset():
         return f"❌ {exc}", gr.update()
     if name is None:
         return message, gr.update()
-    return message, gr.update(choices=list(load_all_presets().keys()))
+    return message, gr.update(choices=list(load_sounds().keys()))
 
 
 def favorites_playlist_markdown():
@@ -1919,6 +2194,27 @@ def migrate_ratings():
 # ==================== PRESET SCORING ====================
 # A preset is scored by the renders made with it, so nothing is rated twice.
 
+def _scores_by(field):
+    """{name: (mean rating, number of rated renders)} over one track.json field."""
+    buckets = {}
+    for track in get_track_data():
+        meta = read_track_metadata(Path(track["path"])) if track.get("path") else {}
+        name = (meta.get(field) or track.get(field) or "").strip()
+        value = track.get("rating")
+        if not name or value is None:
+            continue
+        buckets.setdefault(name, []).append(value)
+    return {name: (sum(v) / len(v), len(v)) for name, v in buckets.items()}
+
+
+def sound_scores():
+    return _scores_by("sound")
+
+
+def song_scores():
+    return _scores_by("song")
+
+
 def preset_scores():
     """{preset name: (mean rating, number of rated renders)}"""
     buckets = {}
@@ -1962,6 +2258,63 @@ def refresh_preset_list(show_all=False, current=None):
     if current and current not in choices:
         choices = [current] + choices
     return gr.update(choices=choices)
+
+
+def _visible(entries, factory, scores, show_all, min_score=3.0, limit=25):
+    """Untested is not rejected: anything unrated shows. Rated must earn its place."""
+    if show_all:
+        return list(entries.keys())
+    always, scored = [], []
+    for name in entries:
+        if name in factory:
+            always.append(name)
+            continue
+        s = scores.get(name)
+        if s is None:
+            always.append(name)
+        elif s[0] >= min_score:
+            scored.append((s[0], s[1], name))
+    scored.sort(reverse=True)
+    room = max(limit - len(always), 0)
+    return always + [name for _, _, name in scored[:room]]
+
+
+def visible_sounds(show_all=False):
+    return _visible(load_sounds(), FACTORY_SOUNDS, sound_scores(), show_all)
+
+
+def visible_songs(show_all=False):
+    return _visible(load_songs(), FACTORY_SONGS, song_scores(), show_all)
+
+
+def refresh_sound_list(show_all=False, current=None):
+    choices = visible_sounds(show_all)
+    if current and current not in choices:
+        choices = [current] + choices
+    return gr.update(choices=choices)
+
+
+def refresh_song_list(show_all=False, current=None):
+    choices = visible_songs(show_all)
+    if current and current not in choices:
+        choices = [current] + choices
+    return gr.update(choices=choices)
+
+
+def _rank_table(title, scores):
+    if not scores:
+        return f"*No rated renders carry a {title} yet.*"
+    rows = sorted(scores.items(), key=lambda kv: (-kv[1][0], kv[0]))
+    lines = [f"| {title.capitalize()} | Mean | Rated renders |", "|---|---|---|"]
+    for name, (mean, count) in rows:
+        lines.append(f"| {name} | {mean:.1f} | {count} |")
+    return "\n".join(lines)
+
+
+def sound_song_ranking():
+    """Which sounds and which songs the ratings favour, separately."""
+    return (_rank_table("sound", sound_scores()) + "\n\n"
+            + _rank_table("song", song_scores()))
 
 
 def preset_score_markdown():
@@ -2025,6 +2378,7 @@ def synthesize_audio_step(style, lyrics, abc_text, seed, ode_steps,
                           sem_min_tokens=200, sem_max_tokens=9000,
                           score_top_k=30, score_pen_win=100, cot_mode="full",
                           append_tag=True, audio_format=DEFAULT_AUDIO_FORMAT,
+                          song_name="",
                           progress=gr.Progress()):
     _CANCEL["stop"] = False
     progress(0.02, desc="Preparing pipeline...")
@@ -2133,7 +2487,8 @@ def synthesize_audio_step(style, lyrics, abc_text, seed, ode_steps,
 
     write_track_metadata(
         output_dir, folder_name, track_title, eff_preset, style, lyrics, params_now,
-        audio_path=audio_path, elapsed=elapsed, audio_seconds=audio_seconds
+        audio_path=audio_path, elapsed=elapsed, audio_seconds=audio_seconds,
+        song_name=song_name
     )
 
     status_msg = (f"🎉 Rendered in {elapsed:.1f}s | Length: {audio_seconds:.1f}s | "
@@ -2150,6 +2505,7 @@ def preview_audio_step(style, lyrics, abc_text, seed, ode_steps,
                        sem_min_tokens=200, sem_max_tokens=9000,
                        score_top_k=30, score_pen_win=100, cot_mode="full",
                        append_tag=True, audio_format=DEFAULT_AUDIO_FORMAT,
+                       song_name="",
                        progress=gr.Progress()):
     """
     The opening 20 seconds, at the cheapest flow setting.
@@ -2168,7 +2524,7 @@ def preview_audio_step(style, lyrics, abc_text, seed, ode_steps,
         sem_temp, sem_top_p, rep_pen, cfg_scale, title, preset_name,
         score_temp, score_top_p, score_rep_pen, sem_top_k, sem_pen_win,
         sem_min_tokens, sem_max_tokens, score_top_k, score_pen_win, cot_mode,
-        append_tag, audio_format, progress=progress
+        append_tag, audio_format, song_name, progress=progress
     )
     note = (f"Preview: first **{kept:.0f}s** of **{whole:.0f}s**, "
             f"{PREVIEW_FLOW_STEPS} flow steps. The full score is untouched.")
@@ -2181,6 +2537,7 @@ def one_click_generate_step(style, lyrics, custom_title,
                             sem_min_tokens, sem_max_tokens,
                             cfg_scale, flow_steps, seed, cot_mode,
                             append_tag=True, audio_format=DEFAULT_AUDIO_FORMAT, preset_name="",
+                            song_name="",
                             progress=gr.Progress()):
     """Plan ABC score and synthesize audio in a single flow."""
     abc_text, metrics, plan_msg = generate_plan_step(
@@ -2199,7 +2556,7 @@ def one_click_generate_step(style, lyrics, custom_title,
         sem_top_k=sem_top_k, sem_pen_win=sem_pen_win,
         sem_min_tokens=sem_min_tokens, sem_max_tokens=sem_max_tokens,
         score_top_k=score_top_k, score_pen_win=score_pen_win, cot_mode=cot_mode,
-        append_tag=append_tag, audio_format=audio_format,
+        append_tag=append_tag, audio_format=audio_format, song_name=song_name,
         progress=progress
     )
     total_msg = f"{plan_msg} | {synth_msg}"
@@ -2534,10 +2891,17 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     </div>
     """)
 
-    all_presets = load_all_presets()
-    preset_names = list(all_presets.keys())
-    default_preset_name = preset_names[0] if preset_names else ""
-    init_p = all_presets.get(default_preset_name, {})
+    migration = migrate_presets()
+    if migration:
+        print(f"presets.json split: {migration[0]} presets -> {migration[1]} sounds, "
+              f"{migration[2]} songs. presets.json is left as it was.")
+
+    _sounds = load_sounds()
+    _songs = load_songs()
+    default_sound_name = next(iter(_sounds), "")
+    default_song_name = next(iter(_songs), "")
+    init_p = _sounds.get(default_sound_name, {})
+    init_song = _songs.get(default_song_name, {})
 
     with gr.Tabs():
 
@@ -2546,40 +2910,61 @@ with gr.Blocks(title="YuE2 Studio") as demo:
         # output somewhere you were not looking. It is a panel on this tab now,
         # and planning opens it.
         with gr.TabItem("Create"):
-            last_preset_state = gr.State(default_preset_name)
+            last_sound_state = gr.State(default_sound_name)
+            last_song_state = gr.State(default_song_name)
 
+            # Two lists, chosen independently: a sound is the 16 parameters, a
+            # song is the words and the score. Any sound can play any song.
             with gr.Row(elem_classes=["preset-toolbar-single-row"]):
                 with gr.Row(scale=1, elem_classes=["preset-group"]):
-                    gr.Markdown("**Preset:**", scale=0, min_width=0, elem_classes=["toolbar-label"])
-                    preset_dropdown = gr.Dropdown(
-                        choices=visible_preset_choices(),
-                        value=default_preset_name,
-                        show_label=False,
-                        interactive=True,
-                        allow_custom_value=True,
-                        info=None,
-                        scale=1,
-                        min_width=0,
-                        elem_classes=["compact-dropdown"]
+                    gr.Markdown("**Sound:**", scale=0, min_width=0,
+                                elem_classes=["toolbar-label"])
+                    sound_dropdown = gr.Dropdown(
+                        choices=visible_sounds(), value=default_sound_name,
+                        show_label=False, interactive=True, allow_custom_value=True,
+                        info=None, scale=1, min_width=0,
+                        elem_classes=["compact-dropdown"], elem_id="tip-sound"
                     )
-                    save_preset_btn = gr.Button(
+                    save_sound_btn = gr.Button(
                         "Saved", interactive=False, scale=0, min_width=0,
                         elem_classes=["btn-secondary", "toolbar-btn", "save-preset-btn"],
-                        elem_id="tip-save"
+                        elem_id="tip-save-sound"
                     )
-                    revert_preset_btn = gr.Button(
+                    revert_sound_btn = gr.Button(
                         "Revert", scale=0, min_width=0,
                         elem_classes=["btn-secondary", "toolbar-btn"]
                     )
-                    show_all_presets = gr.Checkbox(
-                        label="all", value=False, scale=0, min_width=0,
-                        elem_classes=["nowrap-check", "tight-check"],
-                        elem_id="tip-show-all-presets"
-                    )
-                    delete_preset_btn = gr.Button(
+                    delete_sound_btn = gr.Button(
                         "🗑", scale=0, min_width=0,
                         elem_classes=["btn-secondary", "toolbar-btn", "icon-btn"]
                     )
+                with gr.Row(scale=1, elem_classes=["preset-group"]):
+                    gr.Markdown("**Song:**", scale=0, min_width=0,
+                                elem_classes=["toolbar-label"])
+                    song_dropdown = gr.Dropdown(
+                        choices=visible_songs(), value=default_song_name,
+                        show_label=False, interactive=True, allow_custom_value=True,
+                        info=None, scale=1, min_width=0,
+                        elem_classes=["compact-dropdown"], elem_id="tip-song"
+                    )
+                    save_song_btn = gr.Button(
+                        "Saved", interactive=False, scale=0, min_width=0,
+                        elem_classes=["btn-secondary", "toolbar-btn", "save-preset-btn"],
+                        elem_id="tip-save-song"
+                    )
+                    revert_song_btn = gr.Button(
+                        "Revert", scale=0, min_width=0,
+                        elem_classes=["btn-secondary", "toolbar-btn"]
+                    )
+                    delete_song_btn = gr.Button(
+                        "🗑", scale=0, min_width=0,
+                        elem_classes=["btn-secondary", "toolbar-btn", "icon-btn"]
+                    )
+                show_all_presets = gr.Checkbox(
+                    label="all", value=False, scale=0, min_width=0,
+                    elem_classes=["nowrap-check", "tight-check"],
+                    elem_id="tip-show-all-presets"
+                )
                 preset_status = gr.Markdown("", scale=0, min_width=0,
                                             elem_classes=["toolbar-status-inline"])
 
@@ -3094,35 +3479,31 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     assert len(PARAM_COMPONENTS) == len(PARAM_SPEC), "PARAM_COMPONENTS must match PARAM_SPEC"
 
     # ---------------------------------------------------------------- presets
-    preset_field_outputs = (
-        [style_input, lyrics_input, custom_title]
-        + PARAM_COMPONENTS
-        + [preset_status, last_preset_state]
-    )
+    # A sound touches only the 16 parameters; a song only the words and the
+    # score. Neither can overwrite the other's half, which is the whole point.
+    sound_outputs = PARAM_COMPONENTS + [preset_status, last_sound_state]
+    song_outputs = [style_input, lyrics_input, custom_title, abc_editor,
+                    preset_status, last_song_state]
 
-    preset_dropdown.change(
-        select_preset,
-        inputs=[preset_dropdown, custom_title, last_preset_state],
-        outputs=preset_field_outputs
+    sound_dropdown.change(select_sound, inputs=[sound_dropdown], outputs=sound_outputs)
+    revert_sound_btn.click(revert_sound, inputs=[sound_dropdown], outputs=sound_outputs)
+    save_sound_btn.click(
+        save_sound,
+        inputs=[sound_dropdown] + PARAM_COMPONENTS,
+        outputs=[sound_dropdown, preset_status, last_sound_state, save_sound_btn]
     )
+    delete_sound_btn.click(delete_sound, inputs=[sound_dropdown],
+                           outputs=[sound_dropdown, preset_status])
 
-    revert_preset_btn.click(
-        revert_preset,
-        inputs=[preset_dropdown],
-        outputs=preset_field_outputs
+    song_dropdown.change(select_song, inputs=[song_dropdown], outputs=song_outputs)
+    revert_song_btn.click(revert_song, inputs=[song_dropdown], outputs=song_outputs)
+    save_song_btn.click(
+        save_song,
+        inputs=[song_dropdown, custom_title, style_input, lyrics_input, abc_editor],
+        outputs=[song_dropdown, preset_status, last_song_state, save_song_btn]
     )
-
-    save_preset_btn.click(
-        save_preset,
-        inputs=[preset_dropdown, style_input, lyrics_input, custom_title] + PARAM_COMPONENTS,
-        outputs=[preset_dropdown, preset_status, last_preset_state, save_preset_btn]
-    )
-
-    delete_preset_btn.click(
-        delete_custom_preset,
-        inputs=[preset_dropdown],
-        outputs=[preset_dropdown, preset_status]
-    )
+    delete_song_btn.click(delete_song, inputs=[song_dropdown],
+                          outputs=[song_dropdown, preset_status])
 
     # ------------------------------------------------------ the three actions
     def reveal_rating(folder_name):
@@ -3134,12 +3515,12 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     render_inputs = [
         style_input, lyrics_input, abc_editor, seed_input, flow_steps_slider,
         sem_temp_slider, sem_top_p_slider, rep_pen_slider, cfg_slider, custom_title,
-        preset_dropdown,
+        sound_dropdown,
         score_temp_slider, score_top_p_slider, score_rep_pen_slider,
         sem_top_k_slider, sem_pen_win_slider,
         sem_min_tokens_slider, sem_max_tokens_slider,
         score_top_k_slider, score_pen_win_slider, cot_mode_dropdown,
-        append_tag_check, audio_format_dd
+        append_tag_check, audio_format_dd, song_dropdown
     ]
 
     # While a render runs, every button that would start another one is dead.
@@ -3183,7 +3564,7 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     ).then(
         one_click_generate_step,
         inputs=([style_input, lyrics_input, custom_title] + PARAM_COMPONENTS
-                + [append_tag_check, audio_format_dd, preset_dropdown]),
+                + [append_tag_check, audio_format_dd, sound_dropdown, song_dropdown]),
         outputs=[audio_output, abc_editor, metrics_display, studio_status, last_render_state]
     ).then(
         reveal_rating, inputs=[last_render_state], outputs=[studio_rating]
@@ -3281,43 +3662,49 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     )
 
     # ------------------------------------------------------- live studio state
-    studio_state_inputs = ([custom_title, preset_dropdown, style_input, lyrics_input,
+    studio_state_inputs = ([custom_title, sound_dropdown, style_input, lyrics_input,
                             append_tag_check] + PARAM_COMPONENTS)
     for comp in studio_state_inputs:
         comp.change(
             refresh_studio_state,
             inputs=studio_state_inputs,
-            outputs=[folder_preview, save_preset_btn]
+            outputs=[folder_preview, save_sound_btn]
+        )
+
+    # Each Save button reports on its own half only.
+    for comp in PARAM_COMPONENTS + [sound_dropdown]:
+        comp.change(sound_button_state, inputs=[sound_dropdown] + PARAM_COMPONENTS,
+                    outputs=[save_sound_btn])
+    for comp in [song_dropdown, custom_title, style_input, lyrics_input, abc_editor]:
+        comp.change(
+            song_button_state,
+            inputs=[song_dropdown, custom_title, style_input, lyrics_input, abc_editor],
+            outputs=[save_song_btn]
         )
 
     # ---------------------------------------------------------------- analysis
     analysis_tab.select(star_report_markdown, outputs=[star_report])
-    analysis_tab.select(preset_score_markdown, outputs=[preset_ranking])
+    analysis_tab.select(sound_song_ranking, outputs=[preset_ranking])
     refresh_report_btn.click(star_report_markdown, outputs=[star_report])
-    refresh_report_btn.click(preset_score_markdown, outputs=[preset_ranking])
+    refresh_report_btn.click(sound_song_ranking, outputs=[preset_ranking])
     migrate_btn.click(migrate_ratings, outputs=[report_status]).then(
         star_report_markdown, outputs=[star_report]
-    ).then(preset_score_markdown, outputs=[preset_ranking])
+    ).then(sound_song_ranking, outputs=[preset_ranking])
     save_favs_preset_btn.click(
         save_favs_preset,
-        outputs=[report_status, preset_dropdown]
+        outputs=[report_status, sound_dropdown]
     ).then(star_report_markdown, outputs=[star_report])
 
     # A rating anywhere changes the analysis and the preset scores everywhere.
     lib_rating.input(star_report_markdown, outputs=[star_report])
-    lib_rating.input(preset_score_markdown, outputs=[preset_ranking])
+    lib_rating.input(sound_song_ranking, outputs=[preset_ranking])
     studio_rating.input(star_report_markdown, outputs=[star_report])
 
-    show_all_presets.change(
-        refresh_preset_list,
-        inputs=[show_all_presets, preset_dropdown],
-        outputs=[preset_dropdown]
-    )
-    lib_rating.input(
-        refresh_preset_list,
-        inputs=[show_all_presets, preset_dropdown],
-        outputs=[preset_dropdown]
-    )
+    for source in (show_all_presets.change, lib_rating.input):
+        source(refresh_sound_list, inputs=[show_all_presets, sound_dropdown],
+               outputs=[sound_dropdown])
+        source(refresh_song_list, inputs=[show_all_presets, song_dropdown],
+               outputs=[song_dropdown])
 
     demo.load(refresh_ui, outputs=[track_selector, track_table])
 

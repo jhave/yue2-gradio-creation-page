@@ -143,3 +143,26 @@ TOOLTIPS["tip-drop-overwrite"] = (
     "want: a preset fills every box at startup, so without this a drop lands "
     "nowhere. Off, only empty boxes are filled and work in progress is safe."
 )
+
+
+TOOLTIPS["tip-sound"] = (
+    "A sound is the 16 parameters and nothing else. Changing the song leaves it "
+    "alone, so one sound you trust can render many pieces — and a rating can be "
+    "attributed to it across all of them."
+)
+
+TOOLTIPS["tip-song"] = (
+    "A song is the track title, the style prompt, the lyrics and, if you save one, "
+    "the ABC score. Changing the sound leaves it alone. An empty lyrics field is "
+    "kept as empty: that is how an instrumental is stored."
+)
+
+TOOLTIPS["tip-save-sound"] = (
+    "Saves the 16 parameters under the name in the box beside it. Reads Saved when "
+    "they already match what is stored, Save changes when they do not."
+)
+
+TOOLTIPS["tip-save-song"] = (
+    "Saves title, prompt, lyrics and score under the name in the box beside it. "
+    "The parameters are not touched."
+)
