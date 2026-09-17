@@ -62,3 +62,39 @@ expected; rebuilding preserves the intro block.
 
 YuE2 is by [m-a-p](https://huggingface.co/m-a-p). This repository is the interface
 and the analysis around it, not the model.
+
+## Layout
+
+This repository is the only copy of the studio. It is not where it runs.
+
+YuE2 needs its clone — `src/`, the `.venv` with `yue2_infer` installed
+editable, the model weights, and `outputs/` where renders land. That clone is
+upstream's repository and cannot be pushed to, so the studio files live here
+and are symlinked into it:
+
+```
+YuE/                                  yue2-gradio-creation-page/
+  app.py           -> ../yue2-gradio-creation-page/app.py
+  tooltips.py      -> ...                                tooltips.py
+  analysis.py      -> ...                                analysis.py
+  presets.json     -> ...                                presets.json
+  assets/studio.*  -> ...                                assets/studio.*
+  .venv/  src/  outputs/   (stay in the clone)           docs/   patches/
+```
+
+Run it from the clone, where `.venv` and `outputs/` are:
+
+```bash
+cd /path/to/YuE && source .venv/bin/activate && python app.py
+```
+
+Editing either path edits the same file, so there is nothing to copy and
+nothing to keep in sync. Two lines in `app.py` depend on this:
+
+- `root_dir = Path(__file__).parent.resolve()` — parent before resolve, so it
+  is the clone, where `.venv`, `src/` and `outputs/` are.
+- `REPO_DIR = Path(__file__).resolve().parent` — resolve first, so it is this
+  repository, and `publish.py` writes the page straight into `docs/` ready to
+  commit.
+
+`patches/` holds the three changes the studio needs in upstream's `src/`.

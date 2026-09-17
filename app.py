@@ -18,7 +18,10 @@ from pathlib import Path
 os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
 
 # Ensure running inside .venv
-root_dir = Path(__file__).resolve().parent
+# .parent before .resolve(): app.py is a symlink in the yue2 working folder,
+# and root_dir must be that folder — where .venv, src/ and outputs/ live —
+# not the repository the symlink points into.
+root_dir = Path(__file__).parent.resolve()
 venv_python = root_dir / ".venv" / "bin" / "python"
 if venv_python.exists() and Path(sys.executable).resolve() != venv_python.resolve():
     os.execv(str(venv_python), [str(venv_python)] + sys.argv)
@@ -1221,7 +1224,11 @@ def load_track_notes(track_name):
     return read_track_metadata(Path("outputs") / track_name).get("notes", "")
 
 
-PLAYLIST_DIR = Path("docs")
+# app.py is a symlink in the working folder, so .resolve() lands in the
+# repository it points into — which is where the published page belongs,
+# ready to commit. Without a symlink this is root_dir and nothing changes.
+REPO_DIR = Path(__file__).resolve().parent
+PLAYLIST_DIR = REPO_DIR / "docs"
 
 
 def _to_mp3(flac_path, dest, bitrate="320k"):

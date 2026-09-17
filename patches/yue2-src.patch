@@ -1,0 +1,108 @@
+diff --git a/examples/generate.py b/examples/generate.py
+index 9f3a033..f1e50dd 100644
+--- a/examples/generate.py
++++ b/examples/generate.py
+@@ -14,6 +14,7 @@ def main():
+     parser.add_argument("--output", type=Path, required=True)
+     parser.add_argument("--model", default="m-a-p/YuE2-3B")
+     parser.add_argument("--vae", default="m-a-p/YuE2-Vae")
++    parser.add_argument("--device", default="auto", help="Inference device (auto, mps, cuda, cpu)")
+     parser.add_argument("--revision")
+     parser.add_argument("--vae-revision")
+     args = parser.parse_args()
+@@ -30,7 +31,7 @@ def main():
+ 
+     with YuE2Pipeline.from_pretrained(
+         args.model, vae=args.vae, revision=args.revision,
+-        vae_revision=args.vae_revision, device="cuda",
++        vae_revision=args.vae_revision, device=args.device,
+     ) as pipe:
+         song = pipe(**request)
+         song.save_artifacts(args.output)
+diff --git a/src/yue2/nar.py b/src/yue2/nar.py
+index cb0bccc..bebb141 100644
+--- a/src/yue2/nar.py
++++ b/src/yue2/nar.py
+@@ -218,6 +218,8 @@ def _offload_ar(model, enabled):
+                     moved.append((module, device))
+             if torch.cuda.is_available():
+                 torch.cuda.empty_cache()
++            if hasattr(torch, "mps") and torch.backends.mps.is_available():
++                torch.mps.empty_cache()
+         yield
+     finally:
+         for module, device in moved:
+diff --git a/src/yue2/pipeline.py b/src/yue2/pipeline.py
+index 9b6fc43..6f5c5fe 100644
+--- a/src/yue2/pipeline.py
++++ b/src/yue2/pipeline.py
+@@ -6,6 +6,7 @@ from pathlib import Path
+ import dataclasses
+ import json
+ import time
++import gc
+ import numpy as np
+ import torch
+ 
+@@ -282,6 +283,13 @@ class YuE2Pipeline:
+                         cancelled=cancelled, on_token=on_token)
+         return SemanticResult(plan, [int(t) - CODEC_OFFSET for t in ids], timing, truncated)
+ 
++    def _empty_cache(self):
++        gc.collect()
++        if self.device.type == "cuda":
++            torch.cuda.empty_cache()
++        elif hasattr(torch, "mps") and torch.backends.mps.is_available():
++            torch.mps.empty_cache()
++
+     def synthesize(self, semantic, *, cancelled=None):
+         from .nar import synthesize
+         if self.backend == "vllm":
+@@ -294,6 +302,7 @@ class YuE2Pipeline:
+         if self.quantization != "none":
+             from .quantization import restore_ar
+             restore_ar(self._model)
++        self._empty_cache()
+         model = self._load_model(for_nar=True)
+         with self._status("Synthesizing audio", unit="steps") as status:
+             report = (lambda completed, total: status.update(completed, total=total)) if self.progress else None
+@@ -301,15 +310,16 @@ class YuE2Pipeline:
+                                 semantic.plan.request.seed, steps=self.generation_config.ode_steps,
+                                 context=self.generation_config.context, offload_ar=self.offload_ar,
+                                 cancelled=cancelled, on_progress=report)
+-            return result.detach().float().cpu().numpy()
++            res = result.detach().float().cpu().numpy()
++            self._empty_cache()
++            return res
+ 
+     def close(self):
+         if self.backend == "vllm":
+             from .fast import close_vllm
+             close_vllm(self)
+         self._model, self._vae = None, None
+-        if self.device.type == "cuda":
+-            torch.cuda.empty_cache()
++        self._empty_cache()
+ 
+     def __enter__(self):
+         return self
+@@ -322,8 +332,7 @@ class YuE2Pipeline:
+         with self._status("Loading audio decoder"):
+             if self._model is not None:
+                 self._model.to("cpu")
+-            if self.device.type == "cuda":
+-                torch.cuda.empty_cache()
++            self._empty_cache()
+             if vae is not None:
+                 model = YuE2VAE.from_pretrained(vae, decoder_only=True, device=self.device)
+             else:
+@@ -352,8 +361,7 @@ class YuE2Pipeline:
+                 return audio[0].float().clamp(-1, 1).T.contiguous().numpy()
+         finally:
+             model.to("cpu")
+-            if self.device.type == "cuda":
+-                torch.cuda.empty_cache()
++            self._empty_cache()
+ 
+     def effective_config(self, request, abc_sampling=None, semantic_sampling=None):
+         config = self.generation_config.to_dict()
