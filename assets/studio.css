@@ -1,0 +1,562 @@
+/* ============================================================================
+   YuE2 Studio — the one stylesheet.
+   Before: two stylesheets (one smuggled into head=, one in css=) both styling
+   buttons, 417 !important, five competing button gradients, and ~25 rules for
+   classes no component carried.
+   Rules here are grouped by what they do, not by when they were added.
+   !important stays only where it overrides a Gradio internal; our own classes
+   (#yue-tip, .stage-label, .star-report) do not need it.
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- tokens -- */
+/* Two themes, one accent each, matching docs/index.html so the studio and the
+   published page are recognisably the same object. */
+:root {
+    --bg:          #fafafa;
+    --surface:     #ffffff;
+    --text:        #09090b;
+    --muted:       #52525b;
+    --border:      #e4e4e7;
+    --subtle:      #f4f4f5;
+    --accent:      #7c3aed;
+    --accent-ink:  #ffffff;
+    --accent-weak: rgba(124, 58, 237, 0.08);
+    --accent-line: rgba(124, 58, 237, 0.22);
+    --ok:          #16a34a;
+    --ok-weak:     rgba(22, 163, 74, 0.10);
+    --shadow:      0 1px 3px rgba(0, 0, 0, 0.06);
+    --radius:      8px;
+    --ctl-h:       36px;
+}
+
+.dark {
+    --bg:          #121216;
+    --surface:     #1a1a20;
+    --text:        #ededf0;
+    --muted:       #a1a1aa;
+    --border:      #2a2a31;
+    --subtle:      #212128;
+    --accent:      #a78bfa;
+    --accent-ink:  #16161a;
+    --accent-weak: rgba(167, 139, 250, 0.10);
+    --accent-line: rgba(167, 139, 250, 0.28);
+    --ok:          #4ade80;
+    --ok-weak:     rgba(74, 222, 128, 0.12);
+    --shadow:      0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* ------------------------------------------------------------------ page -- */
+body,
+.gradio-container {
+    background: var(--bg) !important;
+    color: var(--text) !important;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 1480px !important;
+    margin: 0 auto !important;
+}
+
+.gradio-container h1,
+.gradio-container h2,
+.gradio-container h3,
+.gradio-container h4,
+.gradio-container label,
+.gradio-container .block-title {
+    color: var(--text) !important;
+}
+
+/* ------------------------------------------------------------------ tabs -- */
+/* Gradio's default tab text drops to ~40% opacity when inactive, which reads as
+   disabled. These make the unselected tabs legible without shouting. */
+.tab-nav,
+div[role="tablist"] {
+    border-bottom: 1px solid var(--border) !important;
+    margin-bottom: 10px !important;
+    gap: 4px !important;
+}
+
+button[role="tab"],
+div[role="tablist"] button {
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+    padding: 8px 16px !important;
+    border-radius: var(--radius) var(--radius) 0 0 !important;
+    opacity: 1 !important;
+    color: var(--muted) !important;
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    border-bottom: none !important;
+    cursor: pointer !important;
+}
+
+button[role="tab"] span,
+div[role="tablist"] button span {
+    opacity: 1 !important;
+    color: inherit !important;
+    font-size: inherit !important;
+    font-weight: inherit !important;
+}
+
+button[role="tab"]:hover {
+    color: var(--text) !important;
+    background: var(--subtle) !important;
+}
+
+button[role="tab"].selected,
+div[role="tablist"] button.selected {
+    color: var(--accent) !important;
+    background: var(--surface) !important;
+    border-color: var(--border) !important;
+    box-shadow: inset 0 2px 0 var(--accent) !important;
+}
+
+/* --------------------------------------------------------------- buttons -- */
+/* Two roles, not five. Primary is the thing to press; secondary is everything
+   else. Destructive uses Gradio's own variant="stop". */
+.gradio-container button.btn-primary,
+.gradio-container .btn-primary button {
+    background: var(--accent) !important;
+    color: var(--accent-ink) !important;
+    border: 1px solid var(--accent) !important;
+    font-weight: 600 !important;
+}
+.gradio-container button.btn-primary:hover,
+.gradio-container .btn-primary button:hover {
+    filter: brightness(1.08);
+}
+
+.gradio-container button.btn-secondary,
+.gradio-container .btn-secondary button {
+    background: var(--subtle) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border) !important;
+    font-weight: 500 !important;
+}
+.gradio-container button.btn-secondary:hover,
+.gradio-container .btn-secondary button:hover {
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
+}
+
+/* The one button that should be found without looking for it. */
+.gradio-container button.btn-hero {
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+    padding: 12px !important;
+}
+
+/* Saved state reads as a quiet confirmation, not as a disabled control. */
+.gradio-container button.save-preset-btn:disabled {
+    opacity: 1 !important;
+    cursor: default !important;
+    color: var(--ok) !important;
+    background: var(--ok-weak) !important;
+    border: 1px solid var(--ok) !important;
+}
+
+.nowrap-btn,
+button.nowrap-btn {
+    white-space: nowrap !important;
+    flex: 0 0 auto !important;
+}
+
+button.icon-btn {
+    padding: 0 8px !important;
+    min-width: 34px !important;
+}
+
+/* ---------------------------------------------------------- theme toggle -- */
+.theme-toggle-btn {
+    background: var(--subtle);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 12px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+}
+.theme-toggle-btn:hover {
+    color: var(--text);
+    border-color: var(--accent);
+}
+
+/* --------------------------------------------------- vertical density --- */
+/* Gradio's default rhythm spends most of the column on air between controls.
+   Tightening it buys the prompt and lyrics boxes their height back. */
+.gradio-container .row  { gap: 8px !important; }
+.gradio-container .column { gap: 6px !important; }
+.gradio-container .gap  { gap: 6px !important; }
+.gradio-container .form { margin-bottom: 0 !important; border: none !important; }
+.gradio-container .block {
+    padding-top: 5px !important;
+    padding-bottom: 5px !important;
+}
+.gradio-container .label-wrap {
+    padding: 7px 0 !important;
+    font-size: 0.84rem !important;
+}
+
+/* Slider and number labels: one line, never two. */
+.gradio-container span[data-testid="block-info"],
+.gradio-container .head label,
+.gradio-container label > span {
+    white-space: nowrap !important;
+    font-size: 0.8rem !important;
+    margin-bottom: 1px !important;
+}
+
+/* The number box beside each slider was eating the label's width. */
+.gradio-container input[type="number"] {
+    max-width: 58px !important;
+    padding-left: 6px !important;
+    padding-right: 4px !important;
+    font-size: 0.8rem !important;
+    text-align: right !important;
+}
+.gradio-container .head {
+    gap: 6px !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+}
+.gradio-container .head > label,
+.gradio-container .head > span {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+}
+
+/* ----------------------------------------------------- inline field rows -- */
+/* A label and its adjacent control on one line, which Gradio will otherwise
+   stack and stretch to full width. */
+.field-header-row {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    flex-wrap: nowrap !important;
+    gap: 12px !important;
+    width: 100% !important;
+    margin-bottom: 1px !important;
+}
+
+.field-header-row > div,
+.field-header-row .block,
+.field-header-row .form {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+.field-header-label {
+    font-size: 0.88rem !important;
+    font-weight: 600 !important;
+    color: var(--text) !important;
+    margin: 9px 0 1px 0 !important;
+    white-space: nowrap !important;
+}
+.field-header-label p,
+.field-header-label strong {
+    margin: 0 !important;
+    white-space: nowrap !important;
+}
+.field-header-spaced { margin-top: 10px !important; }
+
+.nowrap-check,
+.nowrap-check label,
+.field-header-row label {
+    white-space: nowrap !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    margin: 0 !important;
+    cursor: pointer !important;
+}
+.nowrap-check span {
+    font-size: 0.82rem !important;
+    color: var(--muted) !important;
+    white-space: nowrap !important;
+}
+div.tight-check {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 58px !important;
+    max-width: 68px !important;
+}
+
+.toggle-row-label,
+.toggle-row-label p {
+    font-size: 0.78rem !important;
+    font-weight: 500 !important;
+    color: var(--muted) !important;
+    margin: 0 !important;
+    white-space: nowrap !important;
+    flex: 0 0 auto !important;
+}
+
+/* The toggles all compose one string, so they sit with the preview. */
+.folder-toggle-row {
+    gap: 0 !important;
+    margin-top: -2px !important;
+    margin-bottom: 12px !important;
+}
+.folder-toggle-row > div.nowrap-check { margin: 0 16px 0 0 !important; }
+.folder-toggle-row .nowrap-check span { font-size: 0.78rem !important; }
+
+/* --------------------------------------------------------- preset toolbar -- */
+.preset-toolbar-single-row,
+.preset-group {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+}
+
+.preset-toolbar-single-row {
+    justify-content: space-between !important;
+    gap: 16px !important;
+    margin-bottom: 6px !important;
+    padding: 2px 0 !important;
+    width: 100% !important;
+}
+
+.preset-group {
+    gap: 6px !important;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    max-width: 700px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+div.toolbar-label {
+    display: inline-flex !important;
+    align-items: center !important;
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: unset !important;
+    max-width: fit-content !important;
+    margin: 0 2px 0 0 !important;
+    padding: 0 !important;
+    font-size: 0.88rem !important;
+    font-weight: 600 !important;
+    color: var(--text) !important;
+    white-space: nowrap !important;
+}
+.toolbar-label p,
+.toolbar-label strong { margin: 0 !important; white-space: nowrap !important; }
+
+/* Dropdowns fill the width between label and button on a single line. */
+.compact-dropdown,
+.preset-group > .form,
+.preset-group > .block:not(.toolbar-label):not(.toolbar-btn) {
+    flex: 1 1 0% !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+.compact-dropdown .wrap,
+.compact-dropdown .wrap-inner,
+.compact-dropdown input,
+.compact-dropdown .secondary-wrap,
+.compact-dropdown .container {
+    min-height: var(--ctl-h) !important;
+    height: var(--ctl-h) !important;
+    font-size: 0.85rem !important;
+    margin: 0 !important;
+    padding-top: 1px !important;
+    padding-bottom: 1px !important;
+    width: 100% !important;
+}
+
+.gradio-container button.toolbar-btn,
+.preset-group button {
+    height: var(--ctl-h) !important;
+    min-height: var(--ctl-h) !important;
+    max-height: var(--ctl-h) !important;
+    margin: 0 !important;
+    padding: 0 10px !important;
+    font-size: 0.85rem !important;
+    border-radius: 7px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    white-space: nowrap !important;
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: unset !important;
+    line-height: 1 !important;
+    box-sizing: border-box !important;
+}
+
+.toolbar-status-inline {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    font-size: 0.8rem !important;
+    color: var(--muted) !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    pointer-events: none !important;
+}
+.toolbar-status-inline p {
+    margin: 0 !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+}
+.toolbar-status-inline:empty,
+.toolbar-status-inline p:empty { display: none !important; }
+
+/* -------------------------------------------------------------- readouts -- */
+.folder-preview-card {
+    background: var(--subtle) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 7px !important;
+    padding: 5px 9px !important;
+    font-size: 0.78rem !important;
+    line-height: 1.4 !important;
+    color: var(--text) !important;
+    margin: 4px 0 !important;
+    word-break: break-word !important;
+}
+.folder-preview-card code {
+    font-size: 0.76rem !important;
+    word-break: break-word !important;
+}
+
+.stage-label,
+.stage-label p {
+    font-size: 0.78rem;
+    line-height: 1.4;
+    color: var(--muted);
+    margin: 9px 0 1px 2px;
+    padding: 0;
+    background: transparent;
+    border: none;
+}
+.stage-label:first-child { margin-top: 4px; }
+.stage-label strong { color: var(--text); }
+
+.rating-radio,
+.rating-radio .wrap {
+    display: flex !important;
+    gap: 3px !important;
+    flex-wrap: nowrap !important;
+}
+.rating-radio label {
+    padding: 3px 9px !important;
+    margin: 0 !important;
+    font-size: 0.8rem !important;
+    border-radius: 6px !important;
+    white-space: nowrap !important;
+}
+.rating-row { margin-top: 2px !important; }
+
+.star-report      { font-size: 0.86rem; line-height: 1.6; }
+.star-report h2   { font-size: 1.15rem; margin: 4px 0 2px; }
+.star-report h3 {
+    font-size: 0.95rem;
+    margin: 20px 0 6px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+}
+.star-report table { font-size: 0.82rem; width: 100%; border-collapse: collapse; }
+.star-report td,
+.star-report th    { padding: 4px 8px; }
+.star-report blockquote {
+    border-left: 3px solid var(--accent);
+    margin: 10px 0;
+    padding: 6px 12px;
+    background: var(--accent-weak);
+    border-radius: 0 6px 6px 0;
+}
+.star-report code { font-size: 0.8rem; padding: 1px 5px; }
+
+.favs-playlist,
+.favs-playlist p  { font-size: 0.84rem; line-height: 1.5; margin: 2px 0; }
+.favs-playlist ol,
+.favs-playlist li { margin: 2px 0; }
+
+.faq-body          { font-size: 0.92rem; line-height: 1.65; max-width: 760px; }
+.faq-body h2       { font-size: 1.2rem; margin: 28px 0 6px; }
+.faq-body h3 {
+    font-size: 0.98rem;
+    margin: 22px 0 4px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+.faq-body h3:first-of-type { border-top: none; padding-top: 0; }
+.faq-body a        { color: var(--accent); }
+.faq-body code     { font-size: 0.85rem; }
+
+/* --------------------------------------------------------- sheet music --- */
+/* The staves are engraved black-on-white by abcjs, so this panel stays paper
+   in both themes rather than inverting into illegibility. */
+#sheet-music-paper {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    padding: 18px !important;
+    border-radius: 10px !important;
+    min-height: 320px;
+    max-height: 640px;
+    overflow: auto !important;
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+}
+#sheet-music-paper svg {
+    max-width: 100% !important;
+    height: auto !important;
+}
+#sheet-music-paper .sheet-placeholder {
+    color: #71717a;
+    text-align: center;
+    padding: 40px 12px;
+    font-size: 0.85rem;
+}
+
+/* -------------------------------------------------------------- tooltips -- */
+/* One element on <body>, positioned by JS: Gradio's blocks clip their own
+   overflow, so a CSS-only tooltip anchored inside a slider gets cut off. */
+#yue-tip {
+    position: fixed;
+    z-index: 99999;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+    max-width: 330px;
+    padding: 8px 11px;
+    border-radius: var(--radius);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    background: #18181b;
+    color: #fafafa;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+#yue-tip.on { opacity: 1; }
+
+.yue-tip-target {
+    cursor: help !important;
+    text-decoration: underline dotted var(--accent-line) !important;
+    text-underline-offset: 3px !important;
+}
+button.yue-tip-target { text-decoration: none !important; }
+
+
+/* ---- now playing ------------------------------------------------------- */
+.now-playing { margin: 2px 0 6px 0 !important; font-size: 0.82rem !important; }
+.now-playing p { margin: 0 !important; }
+.np-on { color: var(--accent, #8b5cf6); font-weight: 700; }
+.np-idle { opacity: 0.5; font-style: italic; }

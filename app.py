@@ -38,6 +38,8 @@ import subprocess
 import time
 import gradio as gr
 
+from tooltips import TOOLTIPS
+
 # Global pipeline instance
 _PIPELINE = None
 
@@ -104,6 +106,138 @@ def parse_abc_metrics(abc_text: str) -> str:
         lines.append(f"- **`%{s}`**: {b} bars (~{b * bar_sec:.1f}s)")
 
     return "\n".join(lines)
+
+
+# ==================== DROPPED FILES ====================
+# Scores and prompts written elsewhere — a .abc from notation software, a
+# prompt.md from a text editor — go in by drag and drop or by paste. The
+# routing is by what the file is, not by which box it was dropped on.
+
+# A lyric sheet announces itself: either a markdown heading that says lyrics, or
+# the [Section] tags the model reads. Everything before that is the style prompt.
+_LYRICS_HEADING = re.compile(r"^#{1,6}\s*(lyrics?|words|song)\s*:?\s*$",
+                             re.IGNORECASE | re.MULTILINE)
+_SECTION_TAG = re.compile(r"^\s*\[[^\]\n]{2,60}\]\s*$", re.MULTILINE)
+_STYLE_HEADING = re.compile(r"^#{1,6}\s*(style|prompt|production)\b.*$",
+                            re.IGNORECASE | re.MULTILINE)
+
+
+def split_prompt_document(text):
+    """
+    A prompt document into (style, lyrics).
+
+    Three shapes, in order of how explicitly they say what they are:
+      1. a '## Lyrics' heading          -> split there
+      2. a first [Section] tag          -> split there
+      3. neither                        -> the whole file is the style prompt
+    """
+    text = (text or "").replace("\r\n", "\n").strip()
+    if not text:
+        return "", ""
+
+    m = _LYRICS_HEADING.search(text)
+    if m:
+        style, lyrics = text[:m.start()], text[m.end():]
+    else:
+        m = _SECTION_TAG.search(text)
+        if m:
+            style, lyrics = text[:m.start()], text[m.start():]
+        else:
+            style, lyrics = text, ""
+
+    # A leading '# Style' or '# Prompt' heading is a label for the box the text
+    # is about to land in, so it is dropped rather than sent to the model.
+    style = _STYLE_HEADING.sub("", style, count=1)
+    return style.strip(), lyrics.strip()
+
+
+def abc_title(abc_text):
+    """The ABC T: field, which is the piece's own name for itself."""
+    for line in (abc_text or "").splitlines():
+        if line.startswith("T:"):
+            return line[2:].strip()
+    return ""
+
+
+def load_dropped_files(files, current_title, current_style, current_lyrics, current_abc):
+    """
+    Read dropped or chosen files into the right fields.
+
+      *.abc, *.abc.txt   -> the score panel, and the panel opens
+      *.md, *.txt        -> style prompt, plus lyrics when the file marks them
+
+    An empty field is filled; a field you have already written in is left alone,
+    so dropping a score onto a session in progress cannot silently discard a
+    prompt. The track title is taken from the ABC's T: field, or the filename.
+    """
+    if not files:
+        return (gr.update(), gr.update(), gr.update(), gr.update(),
+                gr.update(), "")
+
+    paths = [Path(f if isinstance(f, str) else getattr(f, "name", str(f)))
+             for f in (files if isinstance(files, list) else [files])]
+
+    new_abc, new_style, new_lyrics, title_from = None, None, None, ""
+    read, skipped = [], []
+
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            skipped.append(f"{path.name} ({exc.strerror or 'unreadable'})")
+            continue
+
+        # .abc.txt is what a browser download of a score is often called.
+        is_abc = (path.suffix.lower() == ".abc"
+                  or path.name.lower().endswith(".abc.txt")
+                  or bool(re.match(r"^\s*X:\s*\d", text)))
+
+        if is_abc:
+            new_abc = text.strip()
+            title_from = abc_title(new_abc) or path.stem.replace(".abc", "")
+            read.append(f"`{path.name}` → score")
+        elif path.suffix.lower() in (".md", ".txt"):
+            style, lyrics = split_prompt_document(text)
+            if style:
+                new_style = style
+            if lyrics:
+                new_lyrics = lyrics
+            where = " + ".join(w for w, v in (("style", style), ("lyrics", lyrics)) if v)
+            read.append(f"`{path.name}` → {where or 'nothing recognisable'}")
+        else:
+            skipped.append(f"{path.name} (not .abc, .md or .txt)")
+
+    def fill(new, current):
+        """New text wins over an empty box; an occupied box is left alone."""
+        if new is None:
+            return gr.update(), False
+        if (current or "").strip():
+            return gr.update(), True
+        return gr.update(value=new), False
+
+    abc_u, abc_kept = fill(new_abc, current_abc)
+    style_u, style_kept = fill(new_style, current_style)
+    lyrics_u, lyrics_kept = fill(new_lyrics, current_lyrics)
+
+    title_u = gr.update()
+    if title_from and not (current_title or "").strip():
+        title_u = gr.update(value=sanitize_song_id(title_from))
+
+    panel_u = gr.update(open=True) if new_abc is not None else gr.update()
+
+    msg = []
+    if read:
+        msg.append("Loaded " + ", ".join(read) + ".")
+    kept = [n for n, k in (("style prompt", style_kept), ("lyrics", lyrics_kept),
+                           ("score", abc_kept)) if k]
+    if kept:
+        joined = kept[0] if len(kept) == 1 else ", ".join(kept[:-1]) + " and " + kept[-1]
+        msg.append(f"Kept the existing {joined} — clear the box and drop again "
+                   f"to replace.")
+    if skipped:
+        msg.append("Skipped " + ", ".join(skipped) + ".")
+
+    return title_u, style_u, lyrics_u, abc_u, panel_u, " ".join(msg)
 
 
 # ==================== PERSISTENT & FACTORY PRESETS ====================
@@ -975,7 +1109,7 @@ def load_track_notes(track_name):
     return read_track_metadata(Path("outputs") / track_name).get("notes", "")
 
 
-PLAYLIST_DIR = Path("outputs") / "favorites_page"
+PLAYLIST_DIR = Path("docs")
 
 
 def _to_mp3(flac_path, dest, bitrate="320k"):
@@ -1003,26 +1137,155 @@ PLAYLIST_TEMPLATE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
 <style>
-  :root { --ink:#18181b; --muted:#71717a; --line:#e4e4e7; --bg:#fbfbfc; --accent:#7c3aed; }
+  :root {
+    color-scheme: light dark;
+    --ink: #18181b;
+    --muted: #71717a;
+    --line: #e4e4e7;
+    --bg: #fbfbfc;
+    --accent: #7c3aed;
+    --card-bg: rgba(124, 58, 237, 0.035);
+  }
   @media (prefers-color-scheme: dark) {
-    :root { --ink:#ededf0; --muted:#a1a1aa; --line:#2a2a31; --bg:#151518; --accent:#a78bfa; }
+    :root {
+      --ink: #ededf0;
+      --muted: #a1a1aa;
+      --line: #2a2a31;
+      --bg: #151518;
+      --accent: #a78bfa;
+      --card-bg: rgba(167, 139, 250, 0.05);
+    }
   }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink);
-         font:15px/1.65 ui-sans-serif,-apple-system,"Helvetica Neue",sans-serif; }
-  .wrap { max-width: 760px; margin: 0 auto; padding: 48px 20px 96px; }
-  h1 { font-size: 1.7rem; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); font-size: 0.88rem; margin: 0 0 36px; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 40px 20px 96px; }
 
-  /* ---- EDIT ME: intro text ---- */
-  .intro { margin: 0 0 40px; }
-  .intro p { margin: 0 0 14px; }
+  .hero-img {
+    width: 100%;
+    height: auto;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+    display: block;
+    margin: 0 0 32px;
+  }
+
+  h1 { font-size: 1.85rem; font-weight: 750; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 32px; }
+
+  .intro { margin: 0 0 44px; }
+  .intro p { margin: 0 0 16px; line-height: 1.75; font-size: 1.02rem; }
+  .intro h2 { font-size: 1.3rem; font-weight: 700; margin: 36px 0 14px; letter-spacing: -0.01em; color: var(--ink); }
+  .intro h3 { font-size: 1.1rem; font-weight: 650; margin: 26px 0 10px; color: var(--ink); }
+  .intro blockquote {
+    margin: 22px 0;
+    padding: 14px 18px;
+    border-left: 3px solid var(--accent);
+    background: var(--card-bg);
+    border-radius: 0 8px 8px 0;
+    color: var(--ink);
+    font-size: 0.94rem;
+    line-height: 1.65;
+  }
+  .intro blockquote p { margin: 0 0 8px; font-size: 0.94rem; }
+  .intro blockquote p:last-child { margin-bottom: 0; }
+  .intro blockquote cite { display: block; margin-top: 10px; font-size: 0.8rem; color: var(--muted); font-style: normal; font-weight: 600; }
+  .intro ul { margin: 12px 0 20px 20px; padding: 0; }
+  .intro li { margin-bottom: 10px; line-height: 1.65; font-size: 0.98rem; }
+  .intro a { color: var(--accent); text-decoration: none; font-weight: 500; }
+  .intro a:hover { text-decoration: underline; }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin: 24px 0 28px;
+  }
+  @media (max-width: 680px) {
+    .stat-grid { grid-template-columns: 1fr; }
+  }
+  .stat-card {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+    background: var(--card-bg);
+  }
+  .stat-card .num {
+    font-size: 1.18rem;
+    font-weight: 700;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-card .num a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .stat-card .num a:hover {
+    text-decoration: underline;
+  }
+  .stat-card .lbl {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-top: 4px;
+    line-height: 1.4;
+  }
+  .stat-card .lbl a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .stat-card .lbl a:hover {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+
+  .playlist-divider {
+    border-top: 2px solid var(--line);
+    margin: 48px 0 28px;
+    padding-top: 24px;
+  }
+  .playlist-divider h2 {
+    font-size: 1.4rem;
+    font-weight: 750;
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+  .playlist-divider p {
+    color: var(--muted);
+    font-size: 0.88rem;
+    margin: 0;
+  }
 
   .track { border-top: 1px solid var(--line); padding: 26px 0; }
-  .track h2 { font-size: 1.06rem; font-weight: 650; margin: 0 0 2px; }
+  .track h2 { font-size: 1.08rem; font-weight: 650; margin: 0 0 2px; }
   .meta { color: var(--muted); font-size: 0.8rem; margin: 0 0 12px; }
   .meta span + span::before { content: " · "; }
-  audio { width: 100%; margin: 6px 0 12px; }
+
+  /* Refined MP3 Player Styling */
+  audio {
+    width: 100%;
+    height: 38px;
+    margin: 8px 0 14px;
+    border-radius: 20px;
+    accent-color: var(--accent);
+    background: var(--card-bg);
+    border: 1px solid var(--line);
+    outline: none;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  audio:hover, audio:focus {
+    border-color: var(--accent);
+    box-shadow: 0 2px 10px rgba(124, 58, 237, 0.12);
+  }
+  audio::-webkit-media-controls-panel,
+  audio::-webkit-media-controls-enclosure {
+    background: transparent;
+  }
   .note { margin: 10px 0 0; }
   .note:empty { display: none; }
   details { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px;
@@ -1045,6 +1308,8 @@ PLAYLIST_TEMPLATE = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
+
+<img class="hero-img" src="img/suno-shit-header.jpg" alt="Suno v.6 is a pile of shit — that's good news for experimental music" width="1920" height="1080">
 
 <h1>__TITLE__</h1>
 <p class="sub">__SUBTITLE__</p>
@@ -1212,11 +1477,32 @@ def step_track(current, min_rating_label="all", step=1):
     return names[0]
 
 
+# Audio.stop fires when playback ENDS and also when the source is swapped out.
+# Without this guard, choosing a track while another plays would stop the old one,
+# fire stop, and immediately skip past the track just chosen.
+_LAST_SELECT = {"at": 0.0}
+
+
 def advance_if_autoplay(current, min_rating_label, autoplay):
     """Audio.stop fires when a track finishes; carry on down the list if asked."""
     if not autoplay:
         return gr.update()
+    if time.perf_counter() - _LAST_SELECT["at"] < 3.0:
+        return gr.update()     # the stop came from a selection, not from an ending
     return step_track(current, min_rating_label, 1)
+
+
+def now_playing_markdown(track_name, min_rating_label="all"):
+    """Which track is loaded, and where it sits in the current list."""
+    if not track_name:
+        return "<span class='np-idle'>nothing selected</span>"
+    names = playlist_names(min_rating_label)
+    position = f"{names.index(track_name) + 1}/{len(names)}" if track_name in names else "—"
+    meta = read_track_metadata(Path("outputs") / track_name)
+    shown = public_title(meta, track_name)
+    stars = rating_stars(rating_of(meta))
+    bits = [b for b in (f"<b>{html.escape(shown)}</b>", stars, meta.get("preset", "")) if b]
+    return f"<span class='np-on'>▶ {position}</span> &nbsp; " + " &nbsp;·&nbsp; ".join(bits)
 
 
 def star_report_markdown():
@@ -1745,13 +2031,16 @@ def filter_by_rating(tracks, min_rating_label):
     return [t for t in tracks if t.get("rating") is not None and t["rating"] >= floor]
 
 
-def get_track_table(min_rating_label="all"):
-    """Format track table for Gradio Dataframe."""
+def get_track_table(min_rating_label="all", playing=None):
+    """Format track table for Gradio Dataframe. `playing` gets a ▶ marker."""
     tracks = filter_by_rating(get_track_data(), min_rating_label)
-    return [
-        [rating_stars(t.get("rating")), t["name"], t["duration"], t["key_bpm"], t["size"], t["date"]]
-        for t in tracks
-    ]
+    rows = []
+    for t in tracks:
+        mark = "▶" if playing and t["name"] == playing else ""
+        stars = rating_stars(t.get("rating"))
+        rows.append([f"{mark} {stars}".strip(), t["name"], t["duration"],
+                     t["key_bpm"], t["size"], t["date"]])
+    return rows
 
 
 def select_track_by_name(name):
@@ -1769,6 +2058,8 @@ def select_track_by_name(name):
     if playable is None and (base / "audio.flac").exists():
         playable = base / "audio.flac"
     flac = str(playable) if playable else None
+
+    _LAST_SELECT["at"] = time.perf_counter()
 
     score_file = base / "score.abc"
     score_text = score_file.read_text(encoding="utf-8", errors="ignore") if score_file.exists() else ""
@@ -1908,1095 +2199,53 @@ def delete_track_action(track_name):
 
 
 # ==================== TOOLTIP LAYER ====================
-# One tooltip element on <body> positioned by JS: Gradio's blocks clip their own
-# overflow, so a CSS-only tooltip anchored inside a slider gets cut off.
-TOOLTIPS = {
-    "tip-score-temp": "ABC temperature. Low (0.4-0.6): conventional diatonic progressions, "
-                      "predictable phrasing. High (1.0+): borrowed chords, modal mixture, "
-                      "irregular bar counts. Above ~1.3 the notation starts malforming. "
-                      "Library default 0.7.",
-    "tip-score-top-p": "Nucleus sampling on the score. Low (0.7-0.8) keeps only the likeliest "
-                       "notes and cancels out a high temperature. High (0.95-1.0) admits rare "
-                       "chord qualities. Library default 0.9.",
-    "tip-score-rep": "Repetition penalty on the notation. Keep near 1.005: repetition is "
-                     "structural in music, and a codec-strength penalty here produces scores "
-                     "that never restate a theme or resolve.",
-    "tip-sem-temp": "Codec temperature — delivery, not melody. Low (0.8-0.95): steady pitch, "
-                    "literal reading of the style prompt. High (1.2-1.4): unstable pitch, ad-lib, "
-                    "timbre drift. Above ~1.5: dropped words. This is the control that costs "
-                    "legibility — raise Score Top-K instead for melodic variety.",
-    "tip-sem-top-p": "Nucleus sampling on the audio stage. Drop to 0.9 before dropping "
-                     "temperature: it removes the improbable tail without flattening what "
-                     "remains. Library default 0.95.",
-    "tip-sem-rep": "Repetition penalty on the codec stream. At 1.0 the model can lock into a "
-                   "loop. Above ~1.3 it refuses to reuse material, so choruses stop sounding "
-                   "like the same chorus. Library default 1.2.",
-    "tip-flow": "ODE solve steps. No effect on composition — the notes and the performance are "
-                "already fixed by the time this runs. Default 12 renders a fast preview; the "
-                "Library's Re-solve button upgrades a keeper to 32 without re-running generation.",
-    "tip-cfg": "Classifier-free guidance. 1.0 means OFF — one forward pass. Any other value "
-               "runs a second negative-conditioned pass: stronger genre adherence, roughly "
-               "double the time for the audio stage, and double the tensor width through the "
-               "attention kernel that aborts under MPS.",
-    "tip-seed": "Fix it when comparing parameters, or you cannot tell a parameter effect from "
-                "sampling variance. Change it to reroll identical settings.",
-    "tip-score-topk": "How many note candidates survive before Top-P. Raising 30 to 60-90 "
-                      "widens melodic choice WITHOUT flattening the distribution — more varied "
-                      "melody at far less cost to legibility than raising temperature. "
-                      "Library default 30.",
-    "tip-sem-topk": "Candidate pool for the audio stage. Lowering 100 to ~50 tightens diction "
-                    "and consonant clarity. Raise it only alongside a lower temperature.",
-    "tip-score-win": "How many recent tokens the score repetition penalty looks back over. "
-                     "Shorter windows permit long-range restatement while still discouraging "
-                     "immediate stutter. Library default 100.",
-    "tip-sem-win": "Lookback for the vocal repetition penalty. A longer window discourages "
-                   "reusing phrases across a wider span; a shorter one only blocks immediate "
-                   "loops. Library default 50.",
-    "tip-minlen": "The end token is forbidden until this many tokens have been generated — "
-                  "a floor on song length. Library default 200.",
-    "tip-maxlen": "Token ceiling for the audio stage, so the effective maximum song length. "
-                  "Library default 9000. Prefix plus this must stay under the 24576 context.",
-    "tip-cot": "full: chord-annotated score, then audio. melody: melody-only score, no chord "
-               "symbols — looser harmonic commitment. off: no score at all, straight to audio "
-               "(the Sheet Music tab stays empty).",
-    "tip-favs-only": "Minimum rating for the list, the table and the ⏮/⏭ playlist. "
-                     "\"unrated\" shows only what you have not judged yet — the queue to work through.",
-    "tip-rating": "0-5. Absent is not zero: leaving a track unrated means unjudged, and the "
-                  "analysis excludes it. A 0 means you listened and rejected it, which is real "
-                  "evidence. 4 or more counts as a favorite for the playlist and the page.",
-    "tip-rating-lib": "0-5. Absent is not zero: unrated means unjudged and is excluded from the "
-                      "analysis; 0 means listened to and rejected. 4+ counts as a favorite.",
-    "tip-show-all-presets": "Off: factory presets, presets with no rated renders, and the best 25 "
-                            "scoring 3.0 or higher. On: every preset in the file.",
-    "tip-migrate": "Converts pre-rating stars to rating 4. Tracks that were never starred stay "
-                   "UNRATED rather than becoming 0 — they were never judged, and recording them "
-                   "as rejections would invent data.",
-    "tip-append-tag": "Appends a short code for every setting that differs from the preset "
-                      "baseline, e.g. [vw1.35_stk80]. Renders of one song at different values "
-                      "stay distinguishable in Finder without the old 120-character names.",
-    "tip-build-page": "Writes outputs/favorites_page/index.html with a player per starred "
-                      "track, a fold-out parameter table and your notes. Audio is converted to "
-                      "MP3 beside it, so the folder can be moved or uploaded whole. Rebuilding "
-                      "preserves any intro text you edited into the page.",
-    "tip-audio-format": "The pipeline writes 24-bit FLAC at about 11 MB per minute. "
-                        "latent.npy is 0.4 MB per minute and the VAE decode is deterministic, "
-                        "so MP3 + latents is a complete archive: the lossless master regenerates "
-                        "exactly, in seconds, from Rebuild lossless in the Library.",
-    "tip-prev": "Previous track in the list currently on screen — the favorites filter "
-                "narrows the playlist as well as the table.",
-    "tip-next": "Next track in the list currently on screen.",
-    "tip-autoplay": "When a track finishes, load and play the next one.",
-    "tip-star-report": "Rebuilds the comparison from every track.json on disk.",
-    "tip-save-favs-preset": "Writes a preset named FAVS-<date> from the median of every "
-                            "starred track's settings. A starting point, not a verdict.",
-    "tip-upgrade": "Re-runs ONLY the flow solve, using the semantic tokens already on disk — the "
-                   "autoregressive stage is skipped. Cost scales with audio LENGTH as well as step "
-                   "count: on a 9000-token track the solve runs about 21s per step, so 32 steps is "
-                   "roughly 11 minutes. On a short track it is under a minute.",
-    "tip-upgrade-steps": "Flow steps for the re-solve. 32 is the library default and the cleanest "
-                         "decode; the cost is roughly linear in this number.",
-    "tip-redecode": "Rebuilds the 24-bit FLAC from latent.npy. VAE decode only — no regeneration, "
-                    "no sampling, bit-identical to the original master.",
-    "tip-display-name": "The name a listener sees. Used for the heading on the playlist page "
-                        "and for the audio filename there — \"iridescent scaling\" becomes "
-                        "audio/iridescent-scaling.mp3. The render folder keeps its own name.",
-    "tip-notes": "Accompanying text for this track. Saved into its track.json and rendered "
-                 "under the track on the playlist page.",
-    "tip-export-favs": "Write outputs/favorites.json — every starred track with its audio path, "
-                       "prompt, lyrics and parameters. This is the input for the favorites page.",
-    "tip-stop": "Sets the flag the pipeline polls between tokens. Generation stops at the next "
-                "token and the half-written folder is removed.",
-    "tip-save": "Green means the current settings are already stored under this preset name. "
-                "Blue means there is something unsaved.",
-}
+# ==================== ASSETS ====================
+# Stylesheet, scripts and hover text live in files, not in string literals here.
+# This block replaces ~1080 lines of embedded CSS/JS/prose: two competing
+# stylesheets (one smuggled into head=, one passed to css=) and a 37-entry
+# tooltip dictionary.
+ASSETS_DIR = root_dir / "assets"
 
-TOOLTIP_SCRIPT = """
-<script>
-window.YUE_TIPS = __TIPS_JSON__;
-(function () {
-  function init() {
-    if (!document.body) { setTimeout(init, 60); return; }
-    var tip = document.getElementById('yue-tip');
-    if (!tip) {
-      tip = document.createElement('div');
-      tip.id = 'yue-tip';
-      document.body.appendChild(tip);
-    }
-    function place(e) {
-      var x = e.clientX + 16, y = e.clientY + 20;
-      var w = tip.offsetWidth, h = tip.offsetHeight;
-      if (x + w > window.innerWidth - 12) x = window.innerWidth - w - 12;
-      if (y + h > window.innerHeight - 12) y = e.clientY - h - 14;
-      tip.style.left = x + 'px';
-      tip.style.top = y + 'px';
-    }
-    function targetOf(el) {
-      // Bind to the parameter NAME only. Binding to the whole block means the
-      // tooltip sits over the control while you are dragging its slider.
-      if (el.tagName === 'BUTTON') return el;
-      var label = el.querySelector('span[data-testid="block-info"]')
-               || el.querySelector('label > span')
-               || el.querySelector('label')
-               || el.querySelector('button');
-      return label || el;
-    }
-    function bind() {
-      Object.keys(window.YUE_TIPS).forEach(function (id) {
-        var el = document.getElementById(id);
-        if (!el) return;
-        var t = targetOf(el);
-        if (!t || t.dataset.yueTipBound) return;
-        t.dataset.yueTipBound = '1';
-        t.classList.add('yue-tip-target');
-        var text = window.YUE_TIPS[id];
-        t.addEventListener('mouseenter', function (e) {
-          tip.textContent = text;
-          tip.classList.add('on');
-          place(e);
-        });
-        t.addEventListener('mousemove', place);
-        t.addEventListener('mouseleave', function () { tip.classList.remove('on'); });
-      });
-    }
-    bind();
-    new MutationObserver(bind).observe(document.body, { childList: true, subtree: true });
-  }
-  init();
-})();
-</script>
-"""
 
-# Load local abcjs library for sheet music visualization
-ABCJS_PATH = Path("assets/abcjs-basic-min.js")
-ABCJS_CODE = ABCJS_PATH.read_text(encoding="utf-8") if ABCJS_PATH.exists() else ""
+def _asset(name):
+    """An asset's text, or '' if it was never vendored. Callers say what a miss costs."""
+    path = ASSETS_DIR / name
+    return path.read_text(encoding="utf-8") if path.exists() else ""
 
-HEAD_SCRIPTS = f"""
-<script>
-{ABCJS_CODE}
-window.renderSheetMusic = function(abc) {{
-    if (!abc || !abc.trim()) return;
-    var container = document.getElementById("sheet-music-paper");
-    if (!container) return;
-    if (window.ABCJS) {{
-        ABCJS.renderAbc("sheet-music-paper", abc, {{
-            responsive: "resize",
-            scale: 0.95,
-            add_classes: true,
-            staffwidth: 720
-        }});
-    }}
-}};
 
-window.toggleTheme = function() {{
-    var isDark = document.documentElement.classList.contains('dark') ||
-                 document.body.classList.contains('dark') ||
-                 (document.querySelector('gradio-app') && document.querySelector('gradio-app').classList.contains('dark'));
-    window.setAppTheme(isDark ? 'light' : 'dark');
-}};
+CUSTOM_CSS = _asset("studio.css")
+if not CUSTOM_CSS:
+    print("note: assets/studio.css not found — the studio will render unstyled.")
 
-window.setAppTheme = function(theme) {{
-    var btn = document.getElementById('theme-toggle-btn');
-    var gApp = document.querySelector('gradio-app');
-    if (theme === 'dark') {{
-        document.documentElement.classList.add('dark');
-        document.body.classList.add('dark');
-        if (gApp) gApp.classList.add('dark');
-        if (btn) btn.innerHTML = '☀️ Light Mode';
-        localStorage.setItem('yue2_theme', 'dark');
-    }} else {{
-        document.documentElement.classList.remove('dark');
-        document.body.classList.remove('dark');
-        if (gApp) gApp.classList.remove('dark');
-        if (btn) btn.innerHTML = '🌙 Dark Mode';
-        localStorage.setItem('yue2_theme', 'light');
-    }}
-}};
+# abcjs is not vendored in this repository. It used to fail silently: ABCJS_CODE
+# became '', window.ABCJS stayed undefined, renderSheetMusic returned early and
+# the panel was blank forever with nothing said. studio.js now writes an
+# explanation into the panel, and startup says it once here.
+_ABCJS = _asset("abcjs-basic-min.js")
+if not _ABCJS:
+    print("note: assets/abcjs-basic-min.js not found — the score panel shows ABC "
+          "text and section timings, but no engraved staves.")
 
-window.initTheme = function() {{
-    var saved = localStorage.getItem('yue2_theme') || 'light';
-    window.setAppTheme(saved);
-}};
-
-document.addEventListener('DOMContentLoaded', window.initTheme);
-window.addEventListener('load', window.initTheme);
-setTimeout(window.initTheme, 250);
-setTimeout(window.initTheme, 1000);
-</script>
-""" + """
-<style>
-.input-with-btn .finder-btn,
-button.finder-btn,
-.toolbar-btn.finder-btn {
-    background: #f4f4f5 !important;
-    background-color: #f4f4f5 !important;
-    border: 1px solid #d4d4d8 !important;
-    color: #18181b !important;
-}
-.input-with-btn .finder-btn:hover,
-button.finder-btn:hover,
-.toolbar-btn.finder-btn:hover {
-    background: #e4e4e7 !important;
-    background-color: #e4e4e7 !important;
-}
-.input-with-btn .rename-btn,
-button.rename-btn,
-.toolbar-btn.rename-btn {
-    background: #2563eb !important;
-    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
-    background-color: #2563eb !important;
-    border: 1px solid #1d4ed8 !important;
-    color: #ffffff !important;
-}
-.input-with-btn .rename-btn:hover,
-button.rename-btn:hover,
-.toolbar-btn.rename-btn:hover {
-    background: #1d4ed8 !important;
-    background-color: #1d4ed8 !important;
-}
-
-.dark .input-with-btn .finder-btn,
-.dark button.finder-btn,
-.dark .toolbar-btn.finder-btn,
-body.dark .input-with-btn .finder-btn,
-body.dark button.finder-btn,
-body.dark .toolbar-btn.finder-btn {
-    background: rgba(255, 255, 255, 0.08) !important;
-    background-color: rgba(255, 255, 255, 0.08) !important;
-    border: 1px solid rgba(255, 255, 255, 0.15) !important;
-    color: #f4f4f5 !important;
-}
-.dark .input-with-btn .rename-btn,
-.dark button.rename-btn,
-.dark .toolbar-btn.rename-btn,
-body.dark .input-with-btn .rename-btn,
-body.dark button.rename-btn,
-body.dark .toolbar-btn.rename-btn {
-    background: #3b82f6 !important;
-    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
-    background-color: #3b82f6 !important;
-    border: 1px solid #2563eb !important;
-    color: #ffffff !important;
-}
-
-/* Single-Row Preset & Variation Toolbar: Dropdowns fill full horizontal space without line wrapping */
-.preset-toolbar-single-row,
-div.preset-toolbar-single-row {
-    display: flex !important;
-    flex-direction: row !important;
-    flex-wrap: nowrap !important;
-    justify-content: space-between !important;
-    align-items: center !important;
-    gap: 16px !important;
-    width: 100% !important;
-    margin-bottom: 6px !important;
-    padding: 2px 0 !important;
-    position: relative !important;
-}
-
-.preset-group,
-.variation-group,
-div.preset-group,
-div.variation-group {
-    display: flex !important;
-    flex-direction: row !important;
-    flex-wrap: nowrap !important;
-    align-items: center !important;
-    gap: 6px !important;
-    flex: 1 1 0% !important;
-    min-width: 0 !important;
-    width: calc(50% - 8px) !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}
-
-.preset-group > .toolbar-label,
-.variation-group > .toolbar-label,
-div.toolbar-label {
-    flex: 0 0 auto !important;
-    width: auto !important;
-    min-width: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    white-space: nowrap !important;
-}
-.toolbar-label p, .toolbar-label strong {
-    margin: 0 !important;
-    white-space: nowrap !important;
-}
-
-.preset-group > .compact-dropdown,
-.variation-group > .compact-dropdown,
-.preset-group > .form,
-.variation-group > .form,
-.compact-dropdown {
-    flex: 1 1 0% !important;
-    width: auto !important;
-    min-width: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}
-
-.compact-dropdown .wrap,
-.compact-dropdown .wrap-inner,
-.compact-dropdown input,
-.compact-dropdown .secondary-wrap,
-.compact-dropdown .container {
-    min-height: 36px !important;
-    height: 36px !important;
-    font-size: 0.85rem !important;
-    margin: 0 !important;
-    padding-top: 1px !important;
-    padding-bottom: 1px !important;
-    width: 100% !important;
-}
-
-.preset-group > .toolbar-btn,
-.variation-group > .toolbar-btn,
-.toolbar-btn {
-    flex: 0 0 auto !important;
-    width: auto !important;
-    min-width: 0 !important;
-    height: 36px !important;
-    min-height: 36px !important;
-    max-height: 36px !important;
-    margin: 0 !important;
-    padding: 0 10px !important;
-    font-size: 0.85rem !important;
-    font-weight: 600 !important;
-    letter-spacing: normal !important;
-    border-radius: 7px !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    white-space: nowrap !important;
-    cursor: pointer !important;
-    box-sizing: border-box !important;
-    line-height: 1 !important;
-}
-</style>
-"""
-
-HEAD_SCRIPTS += TOOLTIP_SCRIPT.replace(
-    "__TIPS_JSON__", json.dumps(TOOLTIPS, ensure_ascii=False)
+HEAD_SCRIPTS = (
+    f"<script>{_ABCJS}</script>\n"
+    f"<script>window.YUE_TIPS = {json.dumps(TOOLTIPS, ensure_ascii=False)};</script>\n"
+    f"<script>{_asset('studio.js')}</script>\n"
 )
 
-# Custom CSS for light/dark themes, high-contrast tab titles, and visual sheet music
-CUSTOM_CSS = """
-:root {
-    --bg-gradient: linear-gradient(180deg, #fafafa 0%, #f4f4f5 100%);
-    --body-bg: #fafafa;
-    --text-main: #09090b;
-    --text-muted: #52525b;
-    --header-title: #09090b;
-    --badge-bg: #f4f4f5;
-    --badge-border: #d4d4d8;
-    --badge-color: #18181b;
-    --tab-inactive-text: #52525b;
-    --tab-inactive-bg: #e4e4e7;
-    --tab-active-text: #09090b;
-    --tab-active-bg: #ffffff;
-    --finder-btn-bg: #f4f4f5;
-    --finder-btn-text: #09090b;
-    --finder-btn-border: #d4d4d8;
-    --paper-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
-}
-
-.dark {
-    --bg-gradient: radial-gradient(circle at 50% 0%, #171923 0%, #0d0f17 100%);
-    --body-bg: #0d0f17;
-    --text-main: #f8fafc;
-    --text-muted: #94a3b8;
-    --header-title: linear-gradient(135deg, #c084fc 0%, #60a5fa 100%);
-    --badge-bg: rgba(139, 92, 246, 0.15);
-    --badge-border: rgba(139, 92, 246, 0.35);
-    --badge-color: #c084fc;
-    --tab-inactive-text: #94a3b8;
-    --tab-inactive-bg: #1e293b;
-    --tab-active-text: #c084fc;
-    --tab-active-bg: #0f172a;
-    --finder-btn-bg: rgba(255, 255, 255, 0.08);
-    --finder-btn-text: #e2e8f0;
-    --finder-btn-border: rgba(255, 255, 255, 0.15);
-    --paper-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-}
-
-body, .gradio-container {
-    background: var(--bg-gradient) !important;
-    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    color: var(--text-main) !important;
-    max-width: 1480px !important;
-    margin: 0 auto !important;
-    transition: background 0.3s ease, color 0.3s ease;
-}
-
-/* Monochrome light mode core typography */
-body:not(.dark) label,
-body:not(.dark) .field-header-label,
-body:not(.dark) .field-header-label strong,
-body:not(.dark) .gr-form label,
-body:not(.dark) .block-title,
-body:not(.dark) span[data-testid="block-info"],
-body:not(.dark) h1, body:not(.dark) h2, body:not(.dark) h3, body:not(.dark) h4 {
-    color: #09090b !important;
-    font-weight: 700 !important;
-}
-
-body:not(.dark) .header-badge {
-    background: #f4f4f5 !important;
-    border: 1px solid #d4d4d8 !important;
-    color: #18181b !important;
-}
-
-body:not(.dark) .theme-toggle-btn {
-    background: #ffffff !important;
-    border: 1px solid #d4d4d8 !important;
-    color: #18181b !important;
-}
-body:not(.dark) .theme-toggle-btn:hover {
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
-}
-
-/* ==================== HIGH CONTRAST ALWAYS-VISIBLE TAB HEADERS ==================== */
-.tab-nav, div[role="tablist"] {
-    border-bottom: 2px solid var(--tab-inactive-bg) !important;
-    margin-bottom: 8px !important;
-    gap: 6px !important;
-}
-
-button[role="tab"], .tab-nav button, div[role="tablist"] button {
-    font-size: 0.95rem !important;
-    font-weight: 700 !important;
-    padding: 8px 18px !important;
-    border-radius: 8px 8px 0 0 !important;
-    transition: all 0.2s ease-in-out !important;
-    opacity: 1 !important;
-    visibility: visible !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    cursor: pointer !important;
-}
-
-button[role="tab"] span, .tab-nav button span, div[role="tablist"] button span,
-button[role="tab"] p, .tab-nav button p, div[role="tablist"] button p {
-    opacity: 1 !important;
-    visibility: visible !important;
-    font-weight: 700 !important;
-    color: inherit !important;
-    font-size: inherit !important;
-}
-
-button[role="tab"]:not(.selected), .tab-nav button:not(.selected), div[role="tablist"] button:not(.selected) {
-    color: var(--tab-inactive-text) !important;
-    background: var(--tab-inactive-bg) !important;
-    border: 1px solid rgba(148, 163, 184, 0.25) !important;
-    border-bottom: none !important;
-}
-button[role="tab"]:not(.selected) span, .tab-nav button:not(.selected) span {
-    color: var(--tab-inactive-text) !important;
-}
-
-button[role="tab"].selected, .tab-nav button.selected, div[role="tablist"] button.selected {
-    color: var(--tab-active-text) !important;
-    background: var(--tab-active-bg) !important;
-    font-weight: 800 !important;
-    border: 1.5px solid var(--tab-active-text) !important;
-    border-bottom: 2.5px solid var(--tab-active-text) !important;
-    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.06) !important;
-}
-.dark button[role="tab"].selected, .dark .tab-nav button.selected, .dark div[role="tablist"] button.selected {
-    box-shadow: 0 -2px 10px rgba(124, 58, 237, 0.12) !important;
-}
-button[role="tab"].selected span, .tab-nav button.selected span {
-    color: var(--tab-active-text) !important;
-}
-
-button[role="tab"]:hover, .tab-nav button:hover, div[role="tablist"] button:hover {
-    color: var(--tab-active-text) !important;
-    transform: translateY(-1px);
-}
-button[role="tab"]:hover span, .tab-nav button:hover span {
-    color: var(--tab-active-text) !important;
-}
-
-/* ==================== BADGES & THEME BUTTON ==================== */
-.header-badge {
-    display: inline-block;
-    padding: 3px 10px;
-    background: var(--badge-bg);
-    border: 1px solid var(--badge-border);
-    border-radius: 9999px;
-    color: var(--badge-color);
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.theme-toggle-btn {
-    background: var(--badge-bg);
-    color: var(--badge-color);
-    border: 1px solid var(--badge-border);
-    border-radius: 8px;
-    padding: 6px 14px;
-    font-size: 0.85rem;
-    font-weight: 700;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-.theme-toggle-btn:hover {
-    transform: scale(1.04);
-}
-
-.one-click-btn {
-    background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 50%, #3b82f6 100%) !important;
-    color: white !important;
-    font-weight: 700 !important;
-    font-size: 1.05rem !important;
-    border: none !important;
-    box-shadow: 0 4px 15px rgba(139, 92, 246, 0.35) !important;
-    transition: all 0.2s ease !important;
-}
-.one-click-btn:hover {
-    box-shadow: 0 6px 25px rgba(236, 72, 153, 0.5) !important;
-    transform: translateY(-1px);
-}
-.accent-btn {
-    background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%) !important;
-    color: white !important;
-    border: none !important;
-    font-weight: 600 !important;
-    transition: all 0.2s ease !important;
-}
-.accent-btn:hover {
-    box-shadow: 0 0 20px rgba(124, 58, 237, 0.45) !important;
-    transform: translateY(-1px);
-}
-.draft-btn {
-    background: linear-gradient(135deg, #0d9488 0%, #0891b2 100%) !important;
-    color: white !important;
-}
-.rename-btn {
-    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
-    color: white !important;
-    font-weight: 600 !important;
-}
-.finder-btn {
-    background: var(--finder-btn-bg) !important;
-    color: var(--finder-btn-text) !important;
-    border: 1px solid var(--finder-btn-border) !important;
-}
-#sheet-music-paper {
-    background: #ffffff !important;
-    color: #0f172a !important;
-    padding: 18px !important;
-    border-radius: 12px !important;
-    min-height: 480px;
-    max-height: 720px;
-    overflow-y: auto !important;
-    overflow-x: auto !important;
-    box-shadow: var(--paper-shadow);
-    border: 1px solid rgba(0,0,0,0.1);
-}
-#sheet-music-paper svg {
-    max-width: 100% !important;
-    height: auto !important;
-}
-
-/* ==================== FIELD HEADERS & CLOSE-PROXIMITY CHECKBOXES ==================== */
-.field-header-row {
-    display: flex !important;
-    flex-direction: row !important;
-    justify-content: flex-start !important;
-    align-items: center !important;
-    flex-wrap: nowrap !important;
-    white-space: nowrap !important;
-    gap: 12px !important;
-    margin-bottom: 3px !important;
-    width: 100% !important;
-}
-
-.field-header-row > div,
-.field-header-row .block,
-.field-header-row .field-header-label,
-.field-header-row .form,
-.field-header-row .gr-checkbox {
-    flex: 0 0 auto !important;
-    flex-grow: 0 !important;
-    flex-shrink: 0 !important;
-    width: auto !important;
-    min-width: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    border: none !important;
-    background: transparent !important;
-    box-shadow: none !important;
-}
-
-.field-header-label {
-    font-size: 0.88rem !important;
-    font-weight: 700 !important;
-    color: var(--text-main) !important;
-    margin: 0 !important;
-    white-space: nowrap !important;
-    flex-shrink: 0 !important;
-}
-
-.field-header-label p, .field-header-label strong {
-    margin: 0 !important;
-    white-space: nowrap !important;
-}
-
-/* Ensure checkbox and label sit directly adjacent and never wrap */
-.nowrap-check,
-.nowrap-check label,
-.nowrap-check span,
-.field-header-row .gr-checkbox,
-.field-header-row label {
-    white-space: nowrap !important;
-    word-break: keep-all !important;
-    flex-shrink: 0 !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    gap: 6px !important;
-    margin: 0 !important;
-    cursor: pointer !important;
-}
-.nowrap-check span {
-    font-size: 0.82rem !important;
-    white-space: nowrap !important;
-    color: var(--text-muted) !important;
-}
-
-.folder-preview-card {
-    background: rgba(139, 92, 246, 0.07) !important;
-    border: 1px solid rgba(139, 92, 246, 0.22) !important;
-    border-radius: 7px !important;
-    padding: 5px 9px !important;
-    font-size: 0.78rem !important;
-    line-height: 1.4 !important;
-    color: var(--text-main) !important;
-    margin-top: 4px !important;
-    margin-bottom: 4px !important;
-    word-break: break-word !important;
-}
-.folder-preview-card code {
-    font-size: 0.76rem !important;
-    word-break: break-word !important;
-}
-body:not(.dark) .folder-preview-card {
-    background: #f4f4f5 !important;
-    border: 1px solid #e4e4e7 !important;
-    color: #09090b !important;
-}
-
-/* ==================== SINGLE-ROW COMPACT PRESET & VARIATION TOOLBAR ==================== */
-.preset-toolbar-single-row,
-.preset-toolbar-single-row.gradio-row,
-.preset-group,
-.preset-group.gradio-row,
-.variation-group,
-.variation-group.gradio-row {
-    display: flex !important;
-    flex-direction: row !important;
-    flex-wrap: nowrap !important;
-    align-items: center !important;
-}
-
-.preset-toolbar-single-row {
-    justify-content: space-between !important;
-    gap: 16px !important;
-    margin-bottom: 6px !important;
-    padding: 2px 0 !important;
-    width: 100% !important;
-    position: relative !important;
-}
-
-.preset-toolbar-single-row > div.preset-group,
-.preset-group {
-    gap: 6px !important;
-    flex: 1 1 auto !important;
-    min-width: 0 !important;
-    width: auto !important;
-    max-width: 700px !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}
-
-/* Eliminate all excess white space in label containers */
-.toolbar-label,
-.preset-group > .toolbar-label,
-.variation-group > .toolbar-label,
-div.toolbar-label {
-    display: inline-flex !important;
-    align-items: center !important;
-    flex: 0 0 auto !important;
-    width: auto !important;
-    min-width: unset !important;
-    max-width: fit-content !important;
-    margin: 0 2px 0 0 !important;
-    padding: 0 !important;
-    font-size: 0.88rem !important;
-    font-weight: 700 !important;
-    color: var(--text-main) !important;
-    white-space: nowrap !important;
-}
-.toolbar-label p, .toolbar-label strong {
-    margin: 0 !important;
-    white-space: nowrap !important;
-}
-
-/* Dropdowns: Fill all horizontal width between label and button on a single line */
-.compact-dropdown,
-.compact-dropdown.preset-select,
-.compact-dropdown.variation-select,
-.preset-group > .compact-dropdown,
-.variation-group > .compact-dropdown,
-.preset-group > .form,
-.variation-group > .form,
-.preset-group > .block:not(.toolbar-label):not(.toolbar-btn),
-.variation-group > .block:not(.toolbar-label):not(.toolbar-btn) {
-    flex: 1 1 0% !important;
-    width: auto !important;
-    min-width: 0 !important;
-    max-width: none !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}
-
-.compact-dropdown .wrap,
-.compact-dropdown .wrap-inner,
-.compact-dropdown input,
-.compact-dropdown .secondary-wrap,
-.compact-dropdown .container {
-    min-height: 36px !important;
-    height: 36px !important;
-    font-size: 0.85rem !important;
-    margin: 0 !important;
-    padding-top: 1px !important;
-    padding-bottom: 1px !important;
-    width: 100% !important;
-}
-
-/* Toolbar Buttons: Same font size as dropdowns (0.85rem), reduced margins and snug padding */
-.toolbar-btn,
-button.toolbar-btn,
-.preset-group button,
-.variation-group button,
-.preset-group .toolbar-btn,
-.variation-group .toolbar-btn {
-    height: 36px !important;
-    min-height: 36px !important;
-    max-height: 36px !important;
-    margin: 0 !important;
-    padding: 0 10px !important;
-    font-size: 0.85rem !important;
-    font-weight: 600 !important;
-    letter-spacing: normal !important;
-    border-radius: 7px !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    white-space: nowrap !important;
-    flex: 0 0 auto !important;
-    width: auto !important;
-    min-width: unset !important;
-    max-width: unset !important;
-    cursor: pointer !important;
-    box-sizing: border-box !important;
-    line-height: 1 !important;
-}
+FAQ_PATH = root_dir / "FAQ.md"
+FAQ_TEXT = (FAQ_PATH.read_text(encoding="utf-8") if FAQ_PATH.exists()
+            else "*FAQ.md is missing from the repository root.*")
 
 
-.toolbar-status-inline {
-    flex: 1 1 auto !important;
-    width: auto !important;
-    min-width: 0 !important;
-    max-width: none !important;
-    text-align: left !important;
-    overflow: hidden !important;
-    font-size: 0.8rem !important;
-    color: var(--text-muted) !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    white-space: nowrap !important;
-    text-overflow: ellipsis !important;
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-    pointer-events: none !important;
-}
-.toolbar-status-inline p {
-    margin: 0 !important;
-    overflow: hidden !important;
-    white-space: nowrap !important;
-    text-overflow: ellipsis !important;
-}
-.toolbar-status-inline:empty,
-.toolbar-status-inline p:empty {
-    display: none !important;
-}
-
-/* ==================== SAVE-STATE BUTTON & FOLDER-NAME TOGGLES ==================== */
-/* Saved state reads as a quiet confirmation; unsaved state reads as an action. */
-.save-preset-btn button:disabled,
-button.save-preset-btn:disabled,
-.save-preset-btn:disabled {
-    opacity: 1 !important;
-    cursor: default !important;
-    color: #16a34a !important;
-    background: rgba(22, 163, 74, 0.10) !important;
-    border: 1px solid rgba(22, 163, 74, 0.35) !important;
-    box-shadow: none !important;
-}
-body.dark .save-preset-btn button:disabled,
-body.dark button.save-preset-btn:disabled {
-    color: #4ade80 !important;
-    background: rgba(74, 222, 128, 0.12) !important;
-    border: 1px solid rgba(74, 222, 128, 0.30) !important;
-}
-
-#yue-tip {
-    position: fixed !important;
-    z-index: 99999 !important;
-    pointer-events: none !important;
-    opacity: 0;
-    transition: opacity 0.12s ease !important;
-    max-width: 330px !important;
-    padding: 8px 11px !important;
-    border-radius: 8px !important;
-    font-size: 0.78rem !important;
-    line-height: 1.5 !important;
-    background: #18181b !important;
-    color: #fafafa !important;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.30) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-}
-#yue-tip.on {
-    opacity: 1;
-}
-
-/* ==================== VERTICAL DENSITY ====================
-   Gradio's default rhythm spends most of the column on air between controls.
-   Tightening it buys the prompt and lyrics boxes their height back. */
-.gradio-container .row { gap: 8px !important; }
-.gradio-container .column { gap: 6px !important; }
-.gradio-container .form { margin-bottom: 0 !important; border: none !important; }
-.gradio-container .block { padding-top: 5px !important; padding-bottom: 5px !important; }
-.gradio-container .gap { gap: 6px !important; }
-
-/* Slider and number labels: one line, never two */
-.gradio-container span[data-testid="block-info"],
-.gradio-container .head label,
-.gradio-container label > span {
-    white-space: nowrap !important;
-    font-size: 0.8rem !important;
-    margin-bottom: 1px !important;
-}
-
-/* The number box beside each slider was eating the label's width */
-.gradio-container input[type="number"] {
-    max-width: 58px !important;
-    padding-left: 6px !important;
-    padding-right: 4px !important;
-    font-size: 0.8rem !important;
-    text-align: right !important;
-}
-.gradio-container .head {
-    gap: 6px !important;
-    flex-wrap: nowrap !important;
-    align-items: center !important;
-}
-.gradio-container .head > label,
-.gradio-container .head > span {
-    flex: 1 1 auto !important;
-    min-width: 0 !important;
-}
-
-.field-header-label {
-    margin: 9px 0 1px 0 !important;
-}
-.field-header-row {
-    margin-bottom: 1px !important;
-}
-
-/* Accordion chrome */
-.gradio-container .label-wrap {
-    padding: 7px 0 !important;
-    font-size: 0.84rem !important;
-}
-
-.star-report {
-    font-size: 0.86rem !important;
-    line-height: 1.6 !important;
-}
-.star-report h2 {
-    font-size: 1.15rem !important;
-    margin: 4px 0 2px !important;
-}
-.star-report h3 {
-    font-size: 0.95rem !important;
-    margin: 20px 0 6px !important;
-    padding-top: 12px !important;
-    border-top: 1px solid var(--border-color, #e4e4e7) !important;
-}
-.star-report table {
-    font-size: 0.82rem !important;
-    width: 100% !important;
-    border-collapse: collapse !important;
-}
-.star-report td, .star-report th {
-    padding: 4px 8px !important;
-}
-.star-report blockquote {
-    border-left: 3px solid rgba(139, 92, 246, 0.5) !important;
-    margin: 10px 0 !important;
-    padding: 6px 12px !important;
-    background: rgba(139, 92, 246, 0.06) !important;
-    border-radius: 0 6px 6px 0 !important;
-}
-.star-report code {
-    font-size: 0.8rem !important;
-    padding: 1px 5px !important;
-}
-
-.favs-playlist,
-.favs-playlist p {
-    font-size: 0.84rem !important;
-    line-height: 1.5 !important;
-    margin: 2px 0 !important;
-}
-.favs-playlist ol,
-.favs-playlist li {
-    margin: 2px 0 !important;
-}
-
-.yue-tip-target {
-    cursor: help !important;
-    text-decoration: underline dotted rgba(139, 92, 246, 0.55) !important;
-    text-underline-offset: 3px !important;
-}
-button.yue-tip-target {
-    text-decoration: none !important;
-}
-
-.favs-filter,
-.favs-filter label,
-div.favs-filter {
-    width: auto !important;
-    min-width: 160px !important;
-    flex: 0 0 auto !important;
-    white-space: nowrap !important;
-}
-
-.rating-radio,
-.rating-radio .wrap {
-    gap: 3px !important;
-    flex-wrap: nowrap !important;
-    display: flex !important;
-}
-.rating-radio label {
-    padding: 3px 9px !important;
-    margin: 0 !important;
-    font-size: 0.8rem !important;
-    border-radius: 6px !important;
-    white-space: nowrap !important;
-}
-.rating-row {
-    margin-top: 2px !important;
-}
-
-.tight-check,
-div.tight-check {
-    flex: 0 0 auto !important;
-    width: auto !important;
-    min-width: 58px !important;
-    max-width: 68px !important;
-}
-
-.fav-btn,
-button.fav-btn {
-    font-size: 0.9rem !important;
-    letter-spacing: 0.02em !important;
-}
-
-.stage-label,
-.stage-label p {
-    font-size: 0.78rem !important;
-    line-height: 1.4 !important;
-    color: var(--text-muted) !important;
-    margin: 9px 0 1px 2px !important;
-    padding: 0 !important;
-    background: transparent !important;
-    border: none !important;
-    position: relative !important;
-    z-index: 3 !important;
-    letter-spacing: 0.01em !important;
-}
-.stage-label:first-of-type,
-.stage-label:first-child {
-    margin-top: 4px !important;
-}
-.stage-label strong {
-    color: var(--text-main) !important;
-}
-
-.nowrap-btn,
-button.nowrap-btn,
-.nowrap-btn button {
-    white-space: nowrap !important;
-    flex: 0 0 auto !important;
-}
-
-.icon-btn,
-button.icon-btn {
-    padding: 0 8px !important;
-    min-width: 34px !important;
-}
-
-/* The three toggles all compose one string, so they sit with the preview. */
-.folder-toggle-row {
-    gap: 0 !important;
-    margin-top: -2px !important;
-    margin-bottom: 12px !important;
-    opacity: 0.85 !important;
-}
-.folder-toggle-row .nowrap-check,
-.folder-toggle-row > div.nowrap-check {
-    margin: 0 16px 0 0 !important;
-}
-.folder-toggle-row .toggle-row-label {
-    margin: 0 10px 0 0 !important;
-}
-.toggle-row-label,
-.toggle-row-label p {
-    font-size: 0.78rem !important;
-    font-weight: 500 !important;
-    color: var(--text-muted) !important;
-    margin: 0 !important;
-    white-space: nowrap !important;
-    flex: 0 0 auto !important;
-}
-.folder-toggle-row .nowrap-check span {
-    font-size: 0.78rem !important;
-}
-.field-header-spaced {
-    margin-top: 10px !important;
-}
-
-"""
-
-with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
+with gr.Blocks(title="YuE2 Studio") as demo:
     gr.HTML("""
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px; padding: 2px 0;">
-        <h1 style="font-size: 1.75rem; font-weight: 800; background: var(--header-title); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0;">
-            YuE2 Music Studio
-        </h1>
-        <button id="theme-toggle-btn" class="theme-toggle-btn" onclick="window.toggleTheme()">
-            🌓 Dark / Light
-        </button>
+    <div class="studio-header" style="display:flex; justify-content:space-between;
+         align-items:center; margin-bottom:10px;">
+      <h1 style="font-size:1.4rem; font-weight:700; margin:0; letter-spacing:-0.01em;">
+        YuE2 Studio
+      </h1>
+      <button id="theme-toggle-btn" class="theme-toggle-btn"
+              onclick="window.toggleTheme()">Dark</button>
     </div>
     """)
 
@@ -3006,8 +2255,12 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
     init_p = all_presets.get(default_preset_name, {})
 
     with gr.Tabs():
-        # TAB 1: Creation Studio
-        with gr.TabItem("🎛️ Creation Studio"):
+
+        # ============================== CREATE ==============================
+        # The score used to live on its own tab, so "Plan Score Only" wrote its
+        # output somewhere you were not looking. It is a panel on this tab now,
+        # and planning opens it.
+        with gr.TabItem("Create"):
             last_preset_state = gr.State(default_preset_name)
 
             with gr.Row(elem_classes=["preset-toolbar-single-row"]):
@@ -3022,22 +2275,16 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                         info=None,
                         scale=1,
                         min_width=0,
-                        elem_classes=["compact-dropdown", "preset-select"]
+                        elem_classes=["compact-dropdown"]
                     )
                     save_preset_btn = gr.Button(
-                        "✓ Saved",
-                        variant="secondary",
-                        interactive=False,
-                        scale=0,
-                        min_width=0,
-                        elem_classes=["rename-btn", "toolbar-btn", "save-preset-btn"],
+                        "Saved", interactive=False, scale=0, min_width=0,
+                        elem_classes=["btn-secondary", "toolbar-btn", "save-preset-btn"],
                         elem_id="tip-save"
                     )
                     revert_preset_btn = gr.Button(
-                        "↺ Revert",
-                        scale=0,
-                        min_width=0,
-                        elem_classes=["finder-btn", "toolbar-btn"]
+                        "Revert", scale=0, min_width=0,
+                        elem_classes=["btn-secondary", "toolbar-btn"]
                     )
                     show_all_presets = gr.Checkbox(
                         label="all", value=False, scale=0, min_width=0,
@@ -3045,17 +2292,29 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                         elem_id="tip-show-all-presets"
                     )
                     delete_preset_btn = gr.Button(
-                        "🗑️",
-                        scale=0,
-                        min_width=0,
-                        elem_classes=["finder-btn", "toolbar-btn", "icon-btn"]
+                        "🗑", scale=0, min_width=0,
+                        elem_classes=["btn-secondary", "toolbar-btn", "icon-btn"]
                     )
-                preset_status = gr.Markdown("", scale=0, min_width=0, elem_classes=["toolbar-status-inline"])
+                preset_status = gr.Markdown("", scale=0, min_width=0,
+                                            elem_classes=["toolbar-status-inline"])
+
+            # Scores and prompts written elsewhere come in here. Pasting into the
+            # boxes works as it always did; this is for the files.
+            with gr.Accordion("Open files — drop a .abc score or a prompt.md",
+                              open=False, elem_classes=["drop-panel"]):
+                dropped_files = gr.File(
+                    label="Drag .abc, .md or .txt here, or click to choose",
+                    file_count="multiple",
+                    file_types=[".abc", ".md", ".txt"],
+                    height=110,
+                    elem_id="tip-drop"
+                )
+                drop_status = gr.Markdown("", elem_classes=["toolbar-status-inline"])
 
             with gr.Row():
-                # LEFT COLUMN: Words & Style
+                # ---- what the song is made of
                 with gr.Column(scale=5):
-                    gr.Markdown("**Track Title / Folder Name**", elem_classes=["field-header-label"])
+                    gr.Markdown("**Track title / folder name**", elem_classes=["field-header-label"])
                     custom_title = gr.Textbox(
                         show_label=False,
                         placeholder="e.g. cyber_hopkins_v1 (or leave blank to auto-name)",
@@ -3064,7 +2323,8 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                     init_preview_text = update_folder_preview(
                         init_p.get("custom_title", ""), init_p.get("lyrics", "")
                     )
-                    folder_preview = gr.Markdown(init_preview_text, elem_classes=["folder-preview-card"])
+                    folder_preview = gr.Markdown(init_preview_text,
+                                                 elem_classes=["folder-preview-card"])
                     with gr.Row(elem_classes=["field-header-row", "folder-toggle-row"]):
                         append_tag_check = gr.Checkbox(
                             label="tag folder with changed parameters", value=True,
@@ -3077,28 +2337,23 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                             elem_classes=["compact-dropdown"], elem_id="tip-audio-format"
                         )
 
-                    gr.Markdown("**Style & Production Prompt**", elem_classes=["field-header-label", "field-header-spaced"])
+                    gr.Markdown("**Style and production prompt**",
+                                elem_classes=["field-header-label", "field-header-spaced"])
                     style_input = gr.Textbox(
-                        show_label=False,
-                        value=init_p.get("style", ""),
-                        lines=7,
-                        max_lines=16
+                        show_label=False, value=init_p.get("style", ""), lines=7, max_lines=16
                     )
 
-                    gr.Markdown("**Lyrics (with [Section] tags)**", elem_classes=["field-header-label", "field-header-spaced"])
+                    gr.Markdown("**Lyrics** — with [Section] tags",
+                                elem_classes=["field-header-label", "field-header-spaced"])
                     lyrics_input = gr.Textbox(
-                        show_label=False,
-                        value=init_p.get("lyrics", ""),
-                        lines=8,
-                        max_lines=12
+                        show_label=False, value=init_p.get("lyrics", ""), lines=8, max_lines=12
                     )
 
-                # RIGHT COLUMN: Sound & Generation Controls
+                # ---- how it is made
                 with gr.Column(scale=5):
                     with gr.Group():
-                        gr.Markdown("#### ⚙️ Sound & Generation Parameters")
-
-                        gr.Markdown("**Stage 1 · Score (ABC)** — key, chords, melody, bar structure", elem_classes=["stage-label"])
+                        gr.Markdown("**Stage 1 · Score (ABC)** — key, chords, melody, bar structure",
+                                    elem_classes=["stage-label"])
                         with gr.Row():
                             score_temp_slider = gr.Slider(0.1, 2.0, value=float(init_p.get("score_temp", 0.75)), step=0.05,
                                                           label="Exploration", elem_id="tip-score-temp")
@@ -3107,7 +2362,8 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                             score_rep_pen_slider = gr.Slider(1.0, 1.3, value=float(param_value(init_p, "score_rep_pen")), step=0.005,
                                                              label="Repetition", elem_id="tip-score-rep")
 
-                        gr.Markdown("**Stage 2 · Semantic (codec)** — timbre, vocal delivery, arrangement", elem_classes=["stage-label"])
+                        gr.Markdown("**Stage 2 · Semantic (codec)** — timbre, vocal delivery, arrangement",
+                                    elem_classes=["stage-label"])
                         with gr.Row():
                             sem_temp_slider = gr.Slider(0.1, 2.0, value=float(init_p.get("sem_temp", 1.15)), step=0.05,
                                                         label="Wildness", elem_id="tip-sem-temp")
@@ -3116,7 +2372,7 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                             rep_pen_slider = gr.Slider(1.0, 1.5, value=float(param_value(init_p, "rep_pen")), step=0.01,
                                                        label="Repetition", elem_id="tip-sem-rep")
 
-                        gr.Markdown("**Stage 3 · Decode & seed**", elem_classes=["stage-label"])
+                        gr.Markdown("**Stage 3 · Decode and seed**", elem_classes=["stage-label"])
                         with gr.Row():
                             flow_steps_slider = gr.Slider(8, 32, value=int(param_value(init_p, "flow_steps")), step=4,
                                                           label="Flow Steps", elem_id="tip-flow")
@@ -3125,7 +2381,7 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                             seed_input = gr.Number(value=int(param_value(init_p, "seed")), label="Seed",
                                                    precision=0, elem_id="tip-seed")
 
-                        with gr.Accordion("🔬 Advanced — candidate pools, memory, length", open=False):
+                        with gr.Accordion("Advanced — candidate pools, memory, length", open=False):
                             gr.Markdown("**Top-K** caps how many candidates survive *before* Top-P. "
                                         "Raising it widens choice without flattening the distribution — "
                                         "this is the melodic-variety control that costs the least legibility.",
@@ -3142,7 +2398,7 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                                                                  label="Score Window", elem_id="tip-score-win")
                                 sem_pen_win_slider = gr.Slider(1, 100, value=int(param_value(init_p, "sem_pen_win")), step=1,
                                                                label="Vocal Window", elem_id="tip-sem-win")
-                            gr.Markdown("**Length & mode** — token budget for the audio stage, and whether a score is written at all.",
+                            gr.Markdown("**Length and mode** — token budget for the audio stage, and whether a score is written at all.",
                                         elem_classes=["stage-label"])
                             with gr.Row():
                                 sem_min_tokens_slider = gr.Slider(0, 2000, value=int(param_value(init_p, "sem_min_tokens")), step=50,
@@ -3155,15 +2411,23 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                                     label="Score Mode", interactive=True, elem_id="tip-cot"
                                 )
 
-                    one_click_btn = gr.Button("⚡ 1-Click Fast Song (Plan & Synthesize)", elem_classes=["one-click-btn"], size="lg")
+                    # Three actions, each doing something the others do not.
+                    # There used to be four: "1-Click", "Plan Score Only",
+                    # "Synthesize Audio" here and "Synthesize Audio from this
+                    # Score" on the score tab — the last two called the same
+                    # function with the same arguments.
+                    generate_btn = gr.Button("Generate song", size="lg",
+                                             elem_classes=["btn-primary", "btn-hero"],
+                                             elem_id="tip-generate")
                     with gr.Row():
-                        plan_btn = gr.Button("🎼 Plan Score Only (~20s)", elem_classes=["accent-btn"], size="sm")
-                        render_btn = gr.Button("🎶 Synthesize Audio", elem_classes=["accent-btn", "draft-btn"], size="sm")
-                        stop_btn = gr.Button("🛑 Stop", variant="stop", size="sm", scale=0, min_width=96,
-                                             elem_classes=["nowrap-btn"], elem_id="tip-stop")
+                        plan_btn = gr.Button("Write score only  ·  ~20s", size="sm",
+                                             elem_classes=["btn-secondary"], elem_id="tip-plan")
+                        stop_btn = gr.Button("Stop", variant="stop", size="sm", scale=0,
+                                             min_width=96, elem_classes=["nowrap-btn"],
+                                             elem_id="tip-stop")
 
                     studio_status = gr.Markdown("")
-                    audio_output = gr.Audio(label="Master Audio Player", type="filepath")
+                    audio_output = gr.Audio(label="Result", type="filepath")
                     with gr.Row(elem_classes=["field-header-row"]):
                         gr.Markdown("rate:", elem_classes=["toggle-row-label"])
                         studio_rating = gr.Radio(
@@ -3173,38 +2437,44 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                         )
                         last_render_state = gr.State("")
 
-        # TAB 2: Sheet Music & Score Studio
-        with gr.TabItem("🎼 Sheet Music & Score Studio (Visual ABC)") as score_tab:
-            with gr.Row():
-                with gr.Column(scale=5):
-                    gr.Markdown("### 📄 ABC Symbolic Notation Editor")
-                    abc_editor = gr.Code(
-                        label="Editable ABC Notation (Chords, Notes, Tempo, Keys)",
-                        language="markdown",
-                        lines=16,
-                        max_lines=26,
-                        value=""
-                    )
-                    with gr.Row():
-                        render_sheet_btn = gr.Button("🔄 Re-render Visual Sheet Music", elem_classes=["accent-btn"])
-                        render_from_score_btn = gr.Button("🎶 Synthesize Audio from this Score", elem_classes=["accent-btn", "draft-btn"])
-                    metrics_display = gr.Markdown("Click 'Plan Score' or edit above to calculate section timings.")
-                    score_synth_status = gr.Markdown("")
-                    score_audio_output = gr.Audio(label="Rendered Audio", type="filepath")
+            # ---- the score, where the thing that produces it can be seen
+            with gr.Accordion("Score — ABC notation and staves", open=False) as score_panel:
+                with gr.Row():
+                    with gr.Column(scale=5):
+                        abc_editor = gr.Code(
+                            label="ABC notation — editable",
+                            language="markdown", lines=16, max_lines=26, value=""
+                        )
+                        with gr.Row():
+                            render_from_score_btn = gr.Button(
+                                "Synthesize from this score", size="sm",
+                                elem_classes=["btn-primary"], elem_id="tip-synth-score"
+                            )
+                            render_sheet_btn = gr.Button("Re-render staves", size="sm",
+                                                         elem_classes=["btn-secondary"])
+                        metrics_display = gr.Markdown(
+                            "*Write a score, or paste ABC above, to see section timings.*"
+                        )
+                        score_synth_status = gr.Markdown("")
+                        score_audio_output = gr.Audio(label="Rendered from score", type="filepath")
+                    with gr.Column(scale=5):
+                        sheet_html = gr.HTML(
+                            '<div id="sheet-music-paper">'
+                            '<p class="sheet-placeholder">No score yet. Press '
+                            '<b>Write score only</b> or paste ABC on the left.</p></div>'
+                        )
 
-                with gr.Column(scale=5):
-                    gr.Markdown("### 🎼 Live Sheet Music (Rendered via abcjs)")
-                    sheet_html = gr.HTML('<div id="sheet-music-paper"><p style="color:#64748b; text-align:center; padding:40px 0;">🎼 Sheet music will render here as classical notation staves, clefs, notes, and chords.</p></div>')
-
-        # TAB 3: Track Library & Manager
-        with gr.TabItem("📁 Track Library & Manager (Playback, Rename, Browse)") as library_tab:
+        # ============================== LIBRARY =============================
+        with gr.TabItem("Library") as library_tab:
             with gr.Row():
                 with gr.Column(scale=6):
-                    gr.Markdown("### 🗃️ All Songs & Renders")
                     with gr.Row():
-                        refresh_lib_btn = gr.Button("🔄 Refresh Library", size="sm")
-                        reveal_btn = gr.Button("📂 Reveal in Finder", elem_classes=["finder-btn"], size="sm")
-                        play_system_btn = gr.Button("🔊 Play in macOS Player", elem_classes=["finder-btn"], size="sm")
+                        refresh_lib_btn = gr.Button("Refresh", size="sm",
+                                                    elem_classes=["btn-secondary"])
+                        reveal_btn = gr.Button("Reveal in Finder", size="sm",
+                                               elem_classes=["btn-secondary"])
+                        play_system_btn = gr.Button("Play in macOS player", size="sm",
+                                                    elem_classes=["btn-secondary"])
                         favs_only_check = gr.Dropdown(
                             choices=FILTER_CHOICES, value="all", label="", show_label=False,
                             interactive=True, scale=0, min_width=150,
@@ -3212,42 +2482,43 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                         )
 
                     track_selector = gr.Dropdown(
-                        label="Select Track to Play & Manage (or click row in table below)",
-                        choices=[],
-                        interactive=True
+                        label="Track — pick here, or click a row below",
+                        choices=[], interactive=True
                     )
 
                     track_table = gr.Dataframe(
                         headers=["★", "Track Folder", "Duration", "Key & BPM", "Size", "Created Date"],
                         datatype=["str", "str", "str", "str", "str", "str"],
                         column_widths=["4%", "40%", "12%", "16%", "12%", "16%"],
-                        interactive=False,
-                        wrap=True
+                        interactive=False, wrap=True
                     )
 
-                    with gr.Accordion("★ Favorites playlist", open=False) as favs_panel:
+                    with gr.Accordion("Favourites playlist", open=False) as favs_panel:
                         favs_playlist = gr.Markdown("*No starred tracks yet.*",
                                                     elem_classes=["favs-playlist"])
 
                     with gr.Group():
-                        gr.Markdown("#### ✏️ Rename or Delete Track")
+                        gr.Markdown("**Rename or delete**", elem_classes=["field-header-label"])
                         with gr.Row():
                             new_name_input = gr.Textbox(
-                                label="New Track Name",
-                                placeholder="Enter clean new name (e.g. cyber_hopkins_master)"
+                                label="New name", show_label=False,
+                                placeholder="new folder name, e.g. cyber_hopkins_master"
                             )
-                            rename_btn = gr.Button("Rename Track", elem_classes=["rename-btn"])
-                            delete_btn = gr.Button("🗑️ Delete Track", elem_classes=["finder-btn"])
+                            rename_btn = gr.Button("Rename", elem_classes=["btn-secondary"])
+                            delete_btn = gr.Button("Delete", variant="stop")
                         rename_status = gr.Markdown("")
 
                 with gr.Column(scale=4):
-                    gr.Markdown("### 🎧 Selected Track Playback")
-                    library_audio = gr.Audio(label="Audio Player", type="filepath", autoplay=True)
+                    library_audio = gr.Audio(label="Selected track", type="filepath", autoplay=True)
+                    now_playing = gr.Markdown("<span class='np-idle'>nothing selected</span>",
+                                              elem_classes=["now-playing"])
                     with gr.Row(elem_classes=["field-header-row"]):
                         prev_btn = gr.Button("⏮", size="sm", scale=0, min_width=52,
-                                             elem_classes=["nowrap-btn", "finder-btn"], elem_id="tip-prev")
+                                             elem_classes=["nowrap-btn", "btn-secondary"],
+                                             elem_id="tip-prev")
                         next_btn = gr.Button("⏭", size="sm", scale=0, min_width=52,
-                                             elem_classes=["nowrap-btn", "finder-btn"], elem_id="tip-next")
+                                             elem_classes=["nowrap-btn", "btn-secondary"],
+                                             elem_id="tip-next")
                         autoplay_check = gr.Checkbox(label="continuous", value=True, scale=0,
                                                      min_width=130, elem_classes=["nowrap-check"],
                                                      elem_id="tip-autoplay")
@@ -3258,14 +2529,18 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                             label="", show_label=False, container=False,
                             elem_classes=["rating-radio"], elem_id="tip-rating-lib"
                         )
-                        build_page_btn = gr.Button("🌐 Build playlist page", size="sm", scale=0,
-                                                   min_width=190, elem_classes=["nowrap-btn", "rename-btn"],
+                    with gr.Row(elem_classes=["field-header-row"]):
+                        build_page_btn = gr.Button("Build playlist page", size="sm", scale=0,
+                                                   min_width=180,
+                                                   elem_classes=["nowrap-btn", "btn-primary"],
                                                    elem_id="tip-build-page")
-                        export_favs_btn = gr.Button("📄 Export JSON", size="sm", scale=0,
-                                                    min_width=140, elem_classes=["nowrap-btn", "finder-btn"],
+                        export_favs_btn = gr.Button("Export JSON", size="sm", scale=0,
+                                                    min_width=130,
+                                                    elem_classes=["nowrap-btn", "btn-secondary"],
                                                     elem_id="tip-export-favs")
-                        redecode_btn = gr.Button("🎧 Rebuild lossless", size="sm", scale=0,
-                                                 min_width=170, elem_classes=["nowrap-btn", "finder-btn"],
+                        redecode_btn = gr.Button("Rebuild lossless", size="sm", scale=0,
+                                                 min_width=160,
+                                                 elem_classes=["nowrap-btn", "btn-secondary"],
                                                  elem_id="tip-redecode")
                     with gr.Row(elem_classes=["field-header-row"]):
                         upgrade_steps = gr.Dropdown(
@@ -3273,17 +2548,18 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                             interactive=True, scale=0, min_width=90,
                             elem_classes=["compact-dropdown"], elem_id="tip-upgrade-steps"
                         )
-                        upgrade_btn = gr.Button("⬆ Re-solve at higher steps", size="sm", scale=0,
-                                                min_width=230, elem_classes=["nowrap-btn", "rename-btn"],
+                        upgrade_btn = gr.Button("Re-solve at higher steps", size="sm", scale=0,
+                                                min_width=220,
+                                                elem_classes=["nowrap-btn", "btn-secondary"],
                                                 elem_id="tip-upgrade")
 
-                    with gr.Accordion("📄 Musical Score & Section Timings", open=True):
+                    with gr.Accordion("Score and section timings", open=True):
                         lib_metrics = gr.Markdown("")
-                        library_score = gr.Code(label="ABC Score", language="markdown", lines=8)
+                        library_score = gr.Code(label="ABC score", language="markdown", lines=8)
 
-                    with gr.Accordion("📝 Prompt, Parameters & Lyrics Used", open=False):
+                    with gr.Accordion("Prompt, parameters and lyrics used", open=False):
                         lib_params = gr.Markdown("", elem_classes=["folder-preview-card"])
-                        lib_style = gr.Textbox(label="Style Prompt", lines=2, interactive=False)
+                        lib_style = gr.Textbox(label="Style prompt", lines=2, interactive=False)
                         lib_lyrics = gr.Textbox(label="Lyrics", lines=6, interactive=False)
 
                     with gr.Row(elem_classes=["field-header-row"]):
@@ -3292,22 +2568,25 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                             placeholder="display name for the playlist page — e.g. iridescent scaling",
                             elem_id="tip-display-name"
                         )
-                        save_name_btn = gr.Button("🏷️ Name", size="sm", scale=0, min_width=92,
-                                                  elem_classes=["nowrap-btn", "rename-btn"])
+                        save_name_btn = gr.Button("Set name", size="sm", scale=0, min_width=100,
+                                                  elem_classes=["nowrap-btn", "btn-secondary"])
 
-                    with gr.Accordion("🗒️ Notes for this track", open=False):
+                    with gr.Accordion("Notes for this track", open=False):
                         lib_notes = gr.Textbox(
-                            label="", lines=4, placeholder="Accompanying text — appears under this track on the playlist page.",
+                            label="", lines=4,
+                            placeholder="Accompanying text — appears under this track on the playlist page.",
                             elem_id="tip-notes"
                         )
-                        save_notes_btn = gr.Button("💾 Save notes", size="sm", elem_classes=["rename-btn"])
+                        save_notes_btn = gr.Button("Save notes", size="sm",
+                                                   elem_classes=["btn-secondary"])
 
-            def refresh_ui(min_rating_label="all"):
+            def refresh_ui(min_rating_label="all", current=None):
+                """Rebuild the list without yanking the user off the track they chose."""
                 tracks = filter_by_rating(get_track_data(), min_rating_label)
                 choices = [t["name"] for t in tracks]
-                table = get_track_table(min_rating_label)
-                first = choices[0] if choices else None
-                return gr.update(choices=choices, value=first), gr.update(value=table)
+                keep = current if current in choices else (choices[0] if choices else None)
+                table = get_track_table(min_rating_label, keep)
+                return gr.update(choices=choices, value=keep), gr.update(value=table)
 
             def on_table_select(evt: gr.SelectData, min_rating_label="all"):
                 if evt and evt.index and len(evt.index) > 0:
@@ -3340,19 +2619,19 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                     })
                 out = Path("outputs") / "favorites.json"
                 out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-                return f"📄 Wrote `{out}` — {len(payload)} favorite(s)."
+                return f"Wrote `{out}` — {len(payload)} favourite(s)."
 
             track_table.select(on_table_select, inputs=[favs_only_check], outputs=[track_selector])
-            library_tab.select(refresh_ui, inputs=[favs_only_check], outputs=[track_selector, track_table])
-            refresh_lib_btn.click(refresh_ui, inputs=[favs_only_check], outputs=[track_selector, track_table])
-            favs_only_check.change(refresh_ui, inputs=[favs_only_check], outputs=[track_selector, track_table])
+            library_tab.select(refresh_ui, inputs=[favs_only_check, track_selector], outputs=[track_selector, track_table])
+            refresh_lib_btn.click(refresh_ui, inputs=[favs_only_check, track_selector], outputs=[track_selector, track_table])
+            favs_only_check.change(refresh_ui, inputs=[favs_only_check, track_selector], outputs=[track_selector, track_table])
 
-            lib_rating.change(
+            lib_rating.input(
                 set_rating,
                 inputs=[track_selector, lib_rating],
                 outputs=[lib_rating, rename_status]
             ).then(
-                refresh_ui, inputs=[favs_only_check], outputs=[track_selector, track_table]
+                refresh_ui, inputs=[favs_only_check, track_selector], outputs=[track_selector, track_table]
             ).then(
                 favorites_playlist_markdown, outputs=[favs_playlist]
             )
@@ -3415,6 +2694,16 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                 rating_for_track, inputs=[track_selector], outputs=[lib_rating]
             )
             track_selector.change(
+                now_playing_markdown,
+                inputs=[track_selector, favs_only_check],
+                outputs=[now_playing]
+            )
+            track_selector.change(
+                get_track_table,
+                inputs=[favs_only_check, track_selector],
+                outputs=[track_table]
+            )
+            track_selector.change(
                 load_track_notes, inputs=[track_selector], outputs=[lib_notes]
             )
             track_selector.change(
@@ -3426,7 +2715,8 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
             track_selector.change(
                 select_track_by_name,
                 inputs=[track_selector],
-                outputs=[library_audio, library_score, lib_metrics, lib_params, lib_style, lib_lyrics, rename_status]
+                outputs=[library_audio, library_score, lib_metrics, lib_params,
+                         lib_style, lib_lyrics, rename_status]
             )
 
             # Auto-fill rename box when track changes
@@ -3459,28 +2749,37 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
                 inputs=[track_selector],
                 outputs=[
                     track_selector, track_table,
-                    library_audio, library_score, lib_metrics, lib_params, lib_style, lib_lyrics,
-                    rename_status
+                    library_audio, library_score, lib_metrics, lib_params,
+                    lib_style, lib_lyrics, rename_status
                 ]
             )
 
-        # TAB 4: Star Analysis
-        with gr.TabItem("📊 Star Analysis (What You Keep)") as analysis_tab:
+        # ============================= ANALYSIS =============================
+        with gr.TabItem("Analysis") as analysis_tab:
             with gr.Row(elem_classes=["field-header-row"]):
-                refresh_report_btn = gr.Button("🔄 Rebuild report", size="sm", scale=0,
-                                               min_width=170, elem_classes=["nowrap-btn", "rename-btn"],
+                refresh_report_btn = gr.Button("Rebuild report", size="sm", scale=0,
+                                               min_width=150,
+                                               elem_classes=["nowrap-btn", "btn-primary"],
                                                elem_id="tip-star-report")
-                save_favs_preset_btn = gr.Button("💾 Save FAVS preset", size="sm", scale=0,
-                                                 min_width=190, elem_classes=["nowrap-btn", "finder-btn"],
+                save_favs_preset_btn = gr.Button("Save FAVS preset", size="sm", scale=0,
+                                                 min_width=170,
+                                                 elem_classes=["nowrap-btn", "btn-secondary"],
                                                  elem_id="tip-save-favs-preset")
                 report_status = gr.Markdown("", elem_classes=["toolbar-status-inline"])
-                migrate_btn = gr.Button("↗ Migrate old stars", size="sm", scale=0,
-                                        min_width=180, elem_classes=["nowrap-btn", "finder-btn"],
+                migrate_btn = gr.Button("Migrate old stars", size="sm", scale=0,
+                                        min_width=170,
+                                        elem_classes=["nowrap-btn", "btn-secondary"],
                                         elem_id="tip-migrate")
             star_report = gr.Markdown("*Open this tab to build the report.*",
                                       elem_classes=["star-report"])
             with gr.Accordion("Preset ranking — mean rating of each preset's renders", open=False):
                 preset_ranking = gr.Markdown("", elem_classes=["star-report"])
+
+        # ================================ FAQ ===============================
+        # Content is FAQ.md at the repository root, so it is editable without
+        # touching this file.
+        with gr.TabItem("FAQ"):
+            gr.Markdown(FAQ_TEXT, elem_classes=["faq-body"])
 
     # Every parameter component, in PARAM_SPEC order. Each wiring list below is
     # built from this, so adding a parameter means adding it to PARAM_SPEC and here.
@@ -3494,7 +2793,7 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
     ]
     assert len(PARAM_COMPONENTS) == len(PARAM_SPEC), "PARAM_COMPONENTS must match PARAM_SPEC"
 
-    # Wire Preset actions (single editable dropdown)
+    # ---------------------------------------------------------------- presets
     preset_field_outputs = (
         [style_input, lyrics_input, custom_title]
         + PARAM_COMPONENTS
@@ -3525,35 +2824,12 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
         outputs=[preset_dropdown, preset_status]
     )
 
-    # Wire Studio Creation Buttons
+    # ------------------------------------------------------ the three actions
     def reveal_rating(folder_name):
         """Rating is meaningless until a render exists to rate."""
         if not folder_name:
             return gr.update(visible=False)
         return gr.update(visible=True, value=rating_for_track(folder_name))
-
-    one_click_btn.click(
-        one_click_generate_step,
-        inputs=([style_input, lyrics_input, custom_title] + PARAM_COMPONENTS
-                + [append_tag_check, audio_format_dd, preset_dropdown]),
-        outputs=[audio_output, abc_editor, metrics_display, studio_status, last_render_state]
-    ).then(
-        reveal_rating,
-        inputs=[last_render_state],
-        outputs=[studio_rating]
-    )
-
-    stop_btn.click(request_cancel, outputs=[studio_status])
-
-    plan_btn.click(
-        generate_plan_step,
-        inputs=[
-            style_input, lyrics_input, seed_input,
-            score_temp_slider, score_top_p_slider, score_rep_pen_slider,
-            score_top_k_slider, score_pen_win_slider, cot_mode_dropdown
-        ],
-        outputs=[abc_editor, metrics_display, studio_status]
-    )
 
     render_inputs = [
         style_input, lyrics_input, abc_editor, seed_input, flow_steps_slider,
@@ -3566,36 +2842,68 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
         append_tag_check, audio_format_dd
     ]
 
-    render_btn.click(
-        synthesize_audio_step,
-        inputs=render_inputs,
-        outputs=[audio_output, studio_status, last_render_state]
+    # Score, then audio, in one pass. The score lands in the panel below and the
+    # staves are drawn, so the run leaves evidence of how it got there.
+    generate_btn.click(
+        one_click_generate_step,
+        inputs=([style_input, lyrics_input, custom_title] + PARAM_COMPONENTS
+                + [append_tag_check, audio_format_dd, preset_dropdown]),
+        outputs=[audio_output, abc_editor, metrics_display, studio_status, last_render_state]
     ).then(
-        reveal_rating,
-        inputs=[last_render_state],
-        outputs=[studio_rating]
+        reveal_rating, inputs=[last_render_state], outputs=[studio_rating]
+    ).then(
+        None, inputs=[abc_editor], js="(abc) => { window.renderSheetMusic(abc); }"
     )
 
-    studio_rating.change(
+    # Stage 1 only. Opening the panel is the point: this output used to be
+    # written to a tab the user was not on.
+    plan_btn.click(
+        generate_plan_step,
+        inputs=[
+            style_input, lyrics_input, seed_input,
+            score_temp_slider, score_top_p_slider, score_rep_pen_slider,
+            score_top_k_slider, score_pen_win_slider, cot_mode_dropdown
+        ],
+        outputs=[abc_editor, metrics_display, studio_status]
+    ).then(
+        lambda: gr.update(open=True), outputs=[score_panel]
+    ).then(
+        None, inputs=[abc_editor], js="(abc) => { setTimeout(() => window.renderSheetMusic(abc), 200); }"
+    )
+
+    # Stages 2 and 3 on whatever ABC is in the panel, hand edits included.
+    render_from_score_btn.click(
+        synthesize_audio_step,
+        inputs=render_inputs,
+        outputs=[score_audio_output, score_synth_status, last_render_state]
+    ).then(
+        reveal_rating, inputs=[last_render_state], outputs=[studio_rating]
+    )
+
+    stop_btn.click(request_cancel, outputs=[studio_status])
+
+    # ------------------------------------------------------------ file intake
+    dropped_files.upload(
+        load_dropped_files,
+        inputs=[dropped_files, custom_title, style_input, lyrics_input, abc_editor],
+        outputs=[custom_title, style_input, lyrics_input, abc_editor,
+                 score_panel, drop_status]
+    ).then(
+        None, inputs=[abc_editor],
+        js="(abc) => { setTimeout(() => window.renderSheetMusic(abc), 200); }"
+    )
+
+    studio_rating.input(
         set_rating,
         inputs=[last_render_state, studio_rating],
         outputs=[studio_rating, studio_status]
     )
 
-    # one_click_generate_step takes append_tag before preset_name, so the studio
-    # state listener must include the checkbox in the same canonical position.
-
-    # Wire Tab 2 Sheet Music Studio Buttons
+    # ------------------------------------------------------------ score panel
+    # Staves redraw on demand, not on every keystroke: engraving a full score is
+    # expensive and the ABC text is authoritative either way.
     render_sheet_btn.click(
-        None,
-        inputs=[abc_editor],
-        js="(abc) => { window.renderSheetMusic(abc); }"
-    )
-
-    score_tab.select(
-        None,
-        inputs=[abc_editor],
-        js="(abc) => { setTimeout(() => window.renderSheetMusic(abc), 250); }"
+        None, inputs=[abc_editor], js="(abc) => { window.renderSheetMusic(abc); }"
     )
 
     abc_editor.change(
@@ -3604,13 +2912,7 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
         outputs=[metrics_display]
     )
 
-    render_from_score_btn.click(
-        synthesize_audio_step,
-        inputs=render_inputs,
-        outputs=[score_audio_output, score_synth_status, last_render_state]
-    )
-
-    # Wire live folder-name preview + save-state button
+    # ------------------------------------------------------- live studio state
     studio_state_inputs = ([custom_title, preset_dropdown, style_input, lyrics_input,
                             append_tag_check] + PARAM_COMPONENTS)
     for comp in studio_state_inputs:
@@ -3620,34 +2922,34 @@ with gr.Blocks(title="YuE2 Studio - Apple Silicon") as demo:
             outputs=[folder_preview, save_preset_btn]
         )
 
+    # ---------------------------------------------------------------- analysis
     analysis_tab.select(star_report_markdown, outputs=[star_report])
     analysis_tab.select(preset_score_markdown, outputs=[preset_ranking])
+    refresh_report_btn.click(star_report_markdown, outputs=[star_report])
     refresh_report_btn.click(preset_score_markdown, outputs=[preset_ranking])
     migrate_btn.click(migrate_ratings, outputs=[report_status]).then(
         star_report_markdown, outputs=[star_report]
     ).then(preset_score_markdown, outputs=[preset_ranking])
+    save_favs_preset_btn.click(
+        save_favs_preset,
+        outputs=[report_status, preset_dropdown]
+    ).then(star_report_markdown, outputs=[star_report])
 
-    # Defined in a later tab than the rating controls, so these attach here.
-    lib_rating.change(star_report_markdown, outputs=[star_report])
-    lib_rating.change(preset_score_markdown, outputs=[preset_ranking])
-    studio_rating.change(star_report_markdown, outputs=[star_report])
+    # A rating anywhere changes the analysis and the preset scores everywhere.
+    lib_rating.input(star_report_markdown, outputs=[star_report])
+    lib_rating.input(preset_score_markdown, outputs=[preset_ranking])
+    studio_rating.input(star_report_markdown, outputs=[star_report])
 
-    # Preset list filtering
     show_all_presets.change(
         refresh_preset_list,
         inputs=[show_all_presets, preset_dropdown],
         outputs=[preset_dropdown]
     )
-    lib_rating.change(
+    lib_rating.input(
         refresh_preset_list,
         inputs=[show_all_presets, preset_dropdown],
         outputs=[preset_dropdown]
     )
-    refresh_report_btn.click(star_report_markdown, outputs=[star_report])
-    save_favs_preset_btn.click(
-        save_favs_preset,
-        outputs=[report_status, preset_dropdown]
-    ).then(star_report_markdown, outputs=[star_report])
 
     demo.load(refresh_ui, outputs=[track_selector, track_table])
 
@@ -3658,6 +2960,6 @@ if __name__ == "__main__":
         server_port=7860,
         inbrowser=False,
         head=HEAD_SCRIPTS,
-        theme=gr.themes.Soft(primary_hue="violet", neutral_hue="slate"),
+        theme=gr.themes.Base(primary_hue="violet", neutral_hue="zinc"),
         css=CUSTOM_CSS
     )

@@ -1,175 +1,1226 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>kept takes</title>
-<style>
-  :root { --ink:#18181b; --muted:#71717a; --line:#e4e4e7; --bg:#fbfbfc; --accent:#7c3aed; }
-  @media (prefers-color-scheme: dark) {
-    :root { --ink:#ededf0; --muted:#a1a1aa; --line:#2a2a31; --bg:#151518; --accent:#a78bfa; }
-  }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink);
-         font:15px/1.65 ui-sans-serif,-apple-system,"Helvetica Neue",sans-serif; }
-  .wrap { max-width: 760px; margin: 0 auto; padding: 48px 20px 96px; }
-  h1 { font-size: 1.7rem; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); font-size: 0.88rem; margin: 0 0 36px; }
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Suno v.6 is a pile of shit · kept takes (YuE2)</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --ink: #000000;
+      --muted: #00000098;
+      --line: #e4e4e7;
+      --bg: #fbfbfc;
+      --accent: #ff4e02fc;
+      --card-bg: rgba(124, 58, 237, 0.035);
+    }
 
-  /* ---- EDIT ME: intro text ---- */
-  .intro { margin: 0 0 40px; }
-  .intro p { margin: 0 0 14px; }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --ink: #ededf0;
+        --muted: #47ce81;
+        --line: #2a2a31;
+        --bg: #151518;
+        --accent: #281956;
+        --card-bg: rgba(167, 139, 250, 0.05);
+      }
+    }
 
-  .track { border-top: 1px solid var(--line); padding: 26px 0; }
-  .track h2 { font-size: 1.06rem; font-weight: 650; margin: 0 0 2px; }
-  .meta { color: var(--muted); font-size: 0.8rem; margin: 0 0 12px; }
-  .meta span + span::before { content: " · "; }
-  audio { width: 100%; margin: 6px 0 12px; }
-  .note { margin: 10px 0 0; }
-  .note:empty { display: none; }
-  details { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px;
-            padding: 0 12px; background: rgba(124,58,237,0.035); }
-  details[open] { padding-bottom: 12px; }
-  summary { cursor: pointer; padding: 9px 0; font-size: 0.82rem; color: var(--accent);
-            font-weight: 600; list-style: none; }
-  summary::-webkit-details-marker { display: none; }
-  summary::before { content: "▸ "; }
-  details[open] summary::before { content: "▾ "; }
-  table { border-collapse: collapse; width: 100%; font-size: 0.79rem; }
-  td { padding: 3px 0; vertical-align: top; }
-  td:first-child { color: var(--muted); width: 52%; padding-right: 12px; }
-  td:last-child { font-variant-numeric: tabular-nums; }
-  .prompt { font-size: 0.79rem; color: var(--muted); margin: 10px 0 0;
-            white-space: pre-wrap; }
-  footer { border-top: 1px solid var(--line); margin-top: 40px; padding-top: 18px;
-           color: var(--muted); font-size: 0.76rem; }
-</style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    }
+
+    .wrap {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 40px 20px 96px;
+    }
+
+    /* Hero header image */
+    .hero-img {
+      width: 100%;
+      height: auto;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+      display: block;
+      margin: 0 0 32px;
+    }
+
+    h1 {
+      font-size: 1.85rem;
+      font-weight: 750;
+      margin: 0 0 6px;
+      letter-spacing: -0.02em;
+    }
+
+    .sub {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin: 0 0 32px;
+    }
+
+    /* Blog post & Intro styling */
+    .intro {
+      margin: 0 0 44px;
+    }
+
+    .intro p {
+      margin: 0 0 16px;
+      line-height: 1.75;
+      font-size: 1.02rem;
+    }
+
+    .intro h2 {
+      font-size: 1.3rem;
+      font-weight: 700;
+      margin: 36px 0 14px;
+      letter-spacing: -0.01em;
+      color: var(--ink);
+    }
+
+    .intro h3 {
+      font-size: 1.1rem;
+      font-weight: 650;
+      margin: 26px 0 10px;
+      color: var(--ink);
+    }
+
+    .intro blockquote {
+      margin: 22px 0;
+      padding: 14px 18px;
+      border-left: 3px solid var(--accent);
+      background: var(--card-bg);
+      border-radius: 0 8px 8px 0;
+      color: var(--ink);
+      font-size: 0.94rem;
+      line-height: 1.65;
+    }
+
+    .intro blockquote p {
+      margin: 0 0 8px;
+      font-size: 0.94rem;
+    }
+
+    .intro blockquote p:last-child {
+      margin-bottom: 0;
+    }
+
+    .intro blockquote cite {
+      display: block;
+      margin-top: 10px;
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-style: normal;
+      font-weight: 600;
+    }
+
+    .intro ul {
+      margin: 12px 0 20px 20px;
+      padding: 0;
+    }
+
+    .intro li {
+      margin-bottom: 10px;
+      line-height: 1.65;
+      font-size: 0.98rem;
+    }
+
+    .intro a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .intro a:hover {
+      text-decoration: underline;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin: 24px 0 28px;
+    }
+
+    @media (max-width: 680px) {
+      .stat-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .stat-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      background: var(--card-bg);
+    }
+
+    .stat-card .num {
+      font-size: 1.18rem;
+      font-weight: 700;
+      color: var(--accent);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat-card .num a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .stat-card .num a:hover {
+      text-decoration: underline;
+    }
+
+    .stat-card .lbl {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 4px;
+      line-height: 1.4;
+    }
+
+    .stat-card .lbl a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .stat-card .lbl a:hover {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+
+    .benchmark-figure {
+      margin: 28px 0;
+      text-align: center;
+    }
+
+    .benchmark-img {
+      width: 100%;
+      height: auto;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+      display: block;
+      transition: transform 0.15s ease;
+    }
+
+    .benchmark-figure a:hover .benchmark-img {
+      transform: scale(1.005);
+    }
+
+    .benchmark-figure figcaption {
+      margin-top: 10px;
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .benchmark-figure figcaption a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .benchmark-figure figcaption a:hover {
+      text-decoration: underline;
+    }
+
+    /* Playlist section header */
+    .playlist-divider {
+      border-top: 2px solid var(--line);
+      margin: 48px 0 28px;
+      padding-top: 24px;
+    }
+
+    .playlist-divider h2 {
+      font-size: 1.4rem;
+      font-weight: 750;
+      margin: 0 0 6px;
+      letter-spacing: -0.01em;
+    }
+
+    .playlist-divider p {
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin: 0;
+    }
+
+    /* Track listing */
+    .track {
+      border-top: 1px solid var(--line);
+      padding: 26px 0;
+    }
+
+    .track h2 {
+      font-size: 1.08rem;
+      font-weight: 650;
+      margin: 0 0 2px;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 0.8rem;
+      margin: 0 0 12px;
+    }
+
+    .meta span+span::before {
+      content: " · ";
+    }
+
+    /* Refined MP3 Player Styling */
+    audio {
+      width: 100%;
+      height: 38px;
+      margin: 8px 0 14px;
+      border-radius: 20px;
+      accent-color: var(--accent);
+      background: var(--card-bg);
+      border: 1px solid var(--line);
+      outline: none;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    audio:hover,
+    audio:focus {
+      border-color: var(--accent);
+      box-shadow: 0 2px 10px rgba(124, 58, 237, 0.12);
+    }
+
+    audio::-webkit-media-controls-panel,
+    audio::-webkit-media-controls-enclosure {
+      background: transparent;
+    }
+
+    .note {
+      margin: 10px 0 0;
+    }
+
+    .note:empty {
+      display: none;
+    }
+
+    details.track-params {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 12px;
+      background: var(--card-bg);
+    }
+
+    details.track-params[open] {
+      padding-bottom: 12px;
+    }
+
+    details.track-params summary {
+      cursor: pointer;
+      padding: 9px 0;
+      font-size: 0.82rem;
+      color: var(--accent);
+      font-weight: 600;
+      list-style: none;
+    }
+
+    details.track-params summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.track-params summary::before {
+      content: "▸ ";
+    }
+
+    details.track-params[open] summary::before {
+      content: "▾ ";
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 0.79rem;
+    }
+
+    td {
+      padding: 3px 0;
+      vertical-align: top;
+    }
+
+    td:first-child {
+      color: var(--muted);
+      width: 52%;
+      padding-right: 12px;
+    }
+
+    td:last-child {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .prompt {
+      font-size: 0.79rem;
+      color: var(--muted);
+      margin: 10px 0 0;
+      white-space: pre-wrap;
+      line-height: 1.5;
+    }
+
+    footer {
+      border-top: 1px solid var(--line);
+      margin-top: 48px;
+      padding-top: 18px;
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+  </style>
 </head>
+
 <body>
-<div class="wrap">
+  <div class="wrap">
 
-<h1>kept takes</h1>
-<p class="sub">YuE2 · September 2026</p>
+    <img class="hero-img" src="img/suno-shit-header.jpg"
+      alt="Suno v.6 is a pile of shit — that's good news for experimental music. The corporate nerf by Warner of Suno means the model makes only cliches."
+      width="1920" height="1080">
 
-<!-- ===== EDIT ME: introduction ===== -->
-<div class="intro">
-<p>Renders kept from the YuE2 sessions. Open a track's parameters to see what produced it.</p>
-</div>
-<!-- ===== /EDIT ME ===== -->
+    <h1>The Suno Corporate Lobotomy <br>& the launch of open-source AI music-making: YUE2</h1>
+    <p class="sub">This article includes examples of 8 tracks of music made by the YuE2 open-source AI model · September
+      13–14, 2026 · Jhave</p>
 
-<section class="track" id="riverbed-clay">
-  <h2>riverbed clay</h2>
-  <p class="meta"><span>★★★★</span><span>2m 40s</span><span>? · ? BPM</span><span>2026-09-13</span></p>
-  <audio controls preload="none" src="audio/riverbed-clay.mp3"></audio>
-  <!-- EDIT ME: note for this track -->
-  <p class="note"></p>
-  <details>
-    <summary>parameters</summary>
-    <table><tr><td>Harmonic Exploration</td><td>0.7</td></tr><tr><td>Score Top-P</td><td>0.9</td></tr><tr><td>Score Repetition</td><td>1.005</td></tr><tr><td>Score Top-K</td><td>30</td></tr><tr><td>Score Penalty Window</td><td>100</td></tr><tr><td>Vocal Wildness</td><td>1.35</td></tr><tr><td>Semantic Top-P</td><td>0.95</td></tr><tr><td>Vocal Repetition</td><td>1.32</td></tr><tr><td>Semantic Top-K</td><td>100</td></tr><tr><td>Vocal Penalty Window</td><td>50</td></tr><tr><td>Min Length</td><td>200</td></tr><tr><td>Max Length</td><td>9000</td></tr><tr><td>CFG</td><td>1.0</td></tr><tr><td>Flow Steps</td><td>16</td></tr><tr><td>Seed</td><td>888</td></tr><tr><td>Score Mode</td><td>full</td></tr></table>
-    <p class="prompt">English-Algerian fourth world, lo-fi indie post-math art-rock, fuzzy shoegaze guitars, neo-baroque minimalist horn and string quartet, dnb bass, trap subs, deadpan vocal fry, imperfect close-mic slacker delivery, angular clean chime riffs, hazy tape saturation, cassette hiss, dynamic swells, unpolished, 98 BPM</p>
-    <p class="prompt"><a href="data/riverbed-clay.json">full record</a></p>
-  </details>
-</section>
+    <!-- ===== EDIT ME: introduction ===== -->
+    <div class="intro">
 
-<section class="track" id="sleeping-shale">
-  <h2>sleeping shale</h2>
-  <p class="meta"><span>★★★★</span><span>1m 38s</span><span>D#m · 95 BPM</span><span>2026-09-13</span></p>
-  <audio controls preload="none" src="audio/sleeping-shale.mp3"></audio>
-  <!-- EDIT ME: note for this track -->
-  <p class="note"></p>
-  <details>
-    <summary>parameters</summary>
-    <table><tr><td>Harmonic Exploration</td><td>0.7</td></tr><tr><td>Score Top-P</td><td>0.9</td></tr><tr><td>Score Repetition</td><td>1.005</td></tr><tr><td>Score Top-K</td><td>30</td></tr><tr><td>Score Penalty Window</td><td>100</td></tr><tr><td>Vocal Wildness</td><td>1.25</td></tr><tr><td>Semantic Top-P</td><td>0.95</td></tr><tr><td>Vocal Repetition</td><td>1.25</td></tr><tr><td>Semantic Top-K</td><td>100</td></tr><tr><td>Vocal Penalty Window</td><td>50</td></tr><tr><td>Min Length</td><td>200</td></tr><tr><td>Max Length</td><td>9000</td></tr><tr><td>CFG</td><td>1.2</td></tr><tr><td>Flow Steps</td><td>16</td></tr><tr><td>Seed</td><td>888</td></tr><tr><td>Score Mode</td><td>full</td></tr></table>
-    <p class="prompt">English-Algerian fourth world, lo-fi indie post-math art-rock, fuzzy shoegaze guitars, neo-baroque minimalist horn and string quartet, dnb bass, trap subs, deadpan vocal fry, imperfect close-mic slacker delivery, angular clean chime riffs, hazy tape saturation, cassette hiss, dynamic swells, unpolished, 98 BPM</p>
-    <p class="prompt"><a href="data/sleeping-shale.json">full record</a></p>
-  </details>
-</section>
+      <h2>The Death of Authentic Creativity <br>at the hands of Big Music Corporations</h2>
+      <p>As part of Suno's <a href="https://suno.com/blog/wmg-partnership" target="_blank" rel="noopener">November 25,
+          2025 agreement with Warner</a> (detailed in <a
+          href="https://www.wmg.com/news/warner-music-group-and-suno-forge-groundbreaking-partnership" target="_blank"
+          rel="noopener">WMG&rsquo;s official announcement</a>), all the old Suno models get retired, and Suno trains a
+        new model v.6 on sanitized &ldquo;legal&rdquo; material. Result: degraded creative capacity.</p>
 
-<section class="track" id="folded-beneath-what-listens">
-  <h2>folded beneath what listens</h2>
-  <p class="meta"><span>★★★★</span><span>2m 01s</span><span>Cm · ? BPM</span><span>2026-09-13</span></p>
-  <audio controls preload="none" src="audio/folded-beneath-what-listens.mp3"></audio>
-  <!-- EDIT ME: note for this track -->
-  <p class="note"></p>
-  <details>
-    <summary>parameters</summary>
-    <table><tr><td>Harmonic Exploration</td><td>0.7</td></tr><tr><td>Score Top-P</td><td>0.9</td></tr><tr><td>Score Repetition</td><td>1.005</td></tr><tr><td>Score Top-K</td><td>30</td></tr><tr><td>Score Penalty Window</td><td>100</td></tr><tr><td>Vocal Wildness</td><td>1.15</td></tr><tr><td>Semantic Top-P</td><td>0.95</td></tr><tr><td>Vocal Repetition</td><td>1.24</td></tr><tr><td>Semantic Top-K</td><td>100</td></tr><tr><td>Vocal Penalty Window</td><td>50</td></tr><tr><td>Min Length</td><td>200</td></tr><tr><td>Max Length</td><td>9000</td></tr><tr><td>CFG</td><td>1.0</td></tr><tr><td>Flow Steps</td><td>16</td></tr><tr><td>Seed</td><td>444</td></tr><tr><td>Score Mode</td><td>full</td></tr></table>
-    <p class="prompt">English, progressive hybrid alt-indie lo-fi with drastic section transitions: begins with fragile spectral ambient choral drone breathing and cello, builds into gentle math post-rock clean indie guitars, erupts into heavy lofi trap beat drop with gushing 808 sub-bass and rolling ricochet hi-hats, suddenly subsides into soft fragile tape-decay ambient breakdown, then crescendos into an subtle full post-rock oceanic shimmer bedroom psychedelia wall  of soaring tremolo guitars , neo-soul vocales and trap drums, dynamic whispered to soaring duet vocals, 134 BPM</p>
-    <p class="prompt"><a href="data/folded-beneath-what-listens.json">full record</a></p>
-  </details>
-</section>
+      <p>Earlier Suno models had exquisite range, they generated across a large creative
+        possibility space. V6 is stale. Its audio quality may have improved a micron,
+        but its creative capacity is severely diminished.</p>
 
-<section class="track" id="syncopated-teeth">
-  <h2>syncopated teeth</h2>
-  <p class="meta"><span>★★★★</span><span>3m 58s</span><span>Dm · 86 BPM</span><span>2026-09-13</span></p>
-  <audio controls preload="none" src="audio/syncopated-teeth.mp3"></audio>
-  <!-- EDIT ME: note for this track -->
-  <p class="note"></p>
-  <details>
-    <summary>parameters</summary>
-    <table><tr><td>Harmonic Exploration</td><td>0.7</td></tr><tr><td>Score Top-P</td><td>0.9</td></tr><tr><td>Score Repetition</td><td>1.005</td></tr><tr><td>Score Top-K</td><td>30</td></tr><tr><td>Score Penalty Window</td><td>100</td></tr><tr><td>Vocal Wildness</td><td>1.0</td></tr><tr><td>Semantic Top-P</td><td>0.95</td></tr><tr><td>Vocal Repetition</td><td>1.2</td></tr><tr><td>Semantic Top-K</td><td>100</td></tr><tr><td>Vocal Penalty Window</td><td>50</td></tr><tr><td>Min Length</td><td>200</td></tr><tr><td>Max Length</td><td>9000</td></tr><tr><td>CFG</td><td>1.0</td></tr><tr><td>Flow Steps</td><td>32</td></tr><tr><td>Seed</td><td>42</td></tr><tr><td>Score Mode</td><td>full</td></tr></table>
-    <p class="prompt">English, gentle experimental folktronica, emo alt post-math, hesitant glitch, disk rot artifacts, tape degradation, analog synth warble, fragile acoustic picking, slow build, subtle shoegaze breathy vocals with deadpan vocal fry, intimate, quiet, tape hiss, 84 BPM</p>
-    <p class="prompt"><a href="data/syncopated-teeth.json">full record</a></p>
-  </details>
-</section>
+      <h2>V6: A High School Sophomore in the Clone Arcade</h2>
+      <p>The central dilemma of the Suno-Warner-MGM corporate agreement: truncated data, a smaller more limited
+        training corpus. </p>
 
-<section class="track" id="brindled-baud-rate">
-  <h2>brindled baud-rate</h2>
-  <p class="meta"><span>★★★★</span><span>3m 52s</span><span>D#m · 75 BPM</span><span>2026-09-13</span></p>
-  <audio controls preload="none" src="audio/brindled-baud-rate.mp3"></audio>
-  <!-- EDIT ME: note for this track -->
-  <p class="note"></p>
-  <details>
-    <summary>parameters</summary>
-    <table><tr><td>Harmonic Exploration</td><td>0.7</td></tr><tr><td>Score Top-P</td><td>0.9</td></tr><tr><td>Score Repetition</td><td>1.005</td></tr><tr><td>Score Top-K</td><td>30</td></tr><tr><td>Score Penalty Window</td><td>100</td></tr><tr><td>Vocal Wildness</td><td>1.12</td></tr><tr><td>Semantic Top-P</td><td>0.95</td></tr><tr><td>Vocal Repetition</td><td>1.15</td></tr><tr><td>Semantic Top-K</td><td>100</td></tr><tr><td>Vocal Penalty Window</td><td>50</td></tr><tr><td>Min Length</td><td>200</td></tr><tr><td>Max Length</td><td>9000</td></tr><tr><td>CFG</td><td>1.0</td></tr><tr><td>Flow Steps</td><td>16</td></tr><tr><td>Seed</td><td>777</td></tr><tr><td>Score Mode</td><td>full</td></tr></table>
-    <p class="prompt">English, intimate lofi trap merger, syncopated 808 sub-bass ricochets, tape flutter, imperfect choral and duet whispers, cybernetic sprung-rhythm cadence, 128 BPM</p>
-    <p class="prompt"><a href="data/brindled-baud-rate.json">full record</a></p>
-  </details>
-</section>
+      <p>The following image is an estimate of the training data:</p>
 
-<section class="track" id="bright-black-light">
-  <h2>bright black light</h2>
-  <p class="meta"><span>★★★★</span><span>3m 45s</span><span>Dm · ? BPM</span><span>2026-09-13</span></p>
-  <audio controls preload="none" src="audio/bright-black-light.mp3"></audio>
-  <!-- EDIT ME: note for this track -->
-  <p class="note"></p>
-  <details>
-    <summary>parameters</summary>
-    <table><tr><td>Harmonic Exploration</td><td>0.7</td></tr><tr><td>Score Top-P</td><td>0.9</td></tr><tr><td>Score Repetition</td><td>1.005</td></tr><tr><td>Score Top-K</td><td>30</td></tr><tr><td>Score Penalty Window</td><td>100</td></tr><tr><td>Vocal Wildness</td><td>1.6</td></tr><tr><td>Semantic Top-P</td><td>0.95</td></tr><tr><td>Vocal Repetition</td><td>1.4</td></tr><tr><td>Semantic Top-K</td><td>100</td></tr><tr><td>Vocal Penalty Window</td><td>50</td></tr><tr><td>Min Length</td><td>200</td></tr><tr><td>Max Length</td><td>9000</td></tr><tr><td>CFG</td><td>1.3</td></tr><tr><td>Flow Steps</td><td>16</td></tr><tr><td>Seed</td><td>777</td></tr><tr><td>Score Mode</td><td>full</td></tr></table>
-    <p class="prompt">Root-emograss trap reframed as slow fourth-world psychopastoral chamber: fractured 5/4 and 7/8 pulses beneath dusty Lo-Fi synths, bowed banjo detuned into glass marimba, shoegaze-ASMR vocal fry kept close and breathy, dense shifting jazz harmonies, granular bass, abrupt math-break refrains non-repeating through evolving lines, quirky prepared percussion and muted ensemble textures opening into a virtuoso choral-string outro; intimate stereo saturation, restrained dynamics, wide but muddy, tenderly disorienting.</p>
-    <p class="prompt"><a href="data/bright-black-light.json">full record</a></p>
-  </details>
-</section>
+      <img class="hero-img" src="img/Sunov6-data-incl-yt.png"
+        alt="Suno v.6 Data Incl YT. Suno v.6 dataset includes 100,000 hours of music-only audio, 1.2 million hours of music-with-vocals audio, and 40 million hours of music-associated audio including YouTube. Total: ~41.3 million hours of audio.">
+      <p>Suno v.6 is like a high school sophomore from a small town who&rsquo;s heard a
+        mountain of western pop radio, a few bits of some classics, and a smattering of avant-garde, but has
+        no innate grasp of the reservoir of experimental edgy alternative niche genres that form
+        the foundation of contemporary musical evolution. Constrained to a tiny legal-fraction of the human-music
+        sample-space, most genres collapse into murky repetition. The same riffs dressed up in different clothes. </p>
 
-<section class="track" id="behind-the-universe">
-  <h2>behind the universe</h2>
-  <p class="meta"><span>★★★★</span><span>2m 31s</span><span>E · 65 BPM</span><span>2026-09-14</span></p>
-  <audio controls preload="none" src="audio/behind-the-universe.mp3"></audio>
-  <!-- EDIT ME: note for this track -->
-  <p class="note"></p>
-  <details>
-    <summary>parameters</summary>
-    <table><tr><td>Harmonic Exploration</td><td>1.05</td></tr><tr><td>Score Top-P</td><td>0.96</td></tr><tr><td>Score Repetition</td><td>1.11</td></tr><tr><td>Score Top-K</td><td>55</td></tr><tr><td>Score Penalty Window</td><td>100</td></tr><tr><td>Vocal Wildness</td><td>1.15</td></tr><tr><td>Semantic Top-P</td><td>0.96</td></tr><tr><td>Vocal Repetition</td><td>1.22</td></tr><tr><td>Semantic Top-K</td><td>100</td></tr><tr><td>Vocal Penalty Window</td><td>50</td></tr><tr><td>Min Length</td><td>200</td></tr><tr><td>Max Length</td><td>9000</td></tr><tr><td>CFG</td><td>1.0</td></tr><tr><td>Flow Steps</td><td>16</td></tr><tr><td>Seed</td><td>555</td></tr><tr><td>Score Mode</td><td>full</td></tr></table>
-    <p class="prompt">English-Algerian-Chinese, experimental techno, progressive hybrid  epic with drastic section transitions: begins with fragile spectral ambient choral drone, builds into angular math rock clean indie guitars, erupts into heavy lofi trap beat drop with gushing 808 sub-bass and rolling ricochet hi-hats, suddenly subsides into soft fragile tape-decay ambient breakdown, then crescendos into an explosive post-rock oceanic shimmer wall with soaring tremolo guitars and massive drums, dynamic whispered to soaring duet vocals, 134 BPM</p>
-    <p class="prompt"><a href="data/behind-the-universe.json">full record</a></p>
-  </details>
-</section>
+      <h2>A limited hyper-processed, pre-baked, non-nourishing clone arcade.</h2>
 
-<section class="track" id="maxxamogga">
-  <h2>maxxamogga</h2>
-  <p class="meta"><span>★★★★</span><span>4m 26s</span><span>F#m · 100 BPM</span><span>2026-09-14</span></p>
-  <audio controls preload="none" src="audio/maxxamogga.mp3"></audio>
-  <!-- EDIT ME: note for this track -->
-  <p class="note"></p>
-  <details>
-    <summary>parameters</summary>
-    <table><tr><td>Harmonic Exploration</td><td>0.7</td></tr><tr><td>Score Top-P</td><td>0.9</td></tr><tr><td>Score Repetition</td><td>1.005</td></tr><tr><td>Score Top-K</td><td>30</td></tr><tr><td>Score Penalty Window</td><td>100</td></tr><tr><td>Vocal Wildness</td><td>1.33</td></tr><tr><td>Semantic Top-P</td><td>0.95</td></tr><tr><td>Vocal Repetition</td><td>1.32</td></tr><tr><td>Semantic Top-K</td><td>100</td></tr><tr><td>Vocal Penalty Window</td><td>50</td></tr><tr><td>Min Length</td><td>200</td></tr><tr><td>Max Length</td><td>9000</td></tr><tr><td>CFG</td><td>1.0</td></tr><tr><td>Flow Steps</td><td>16</td></tr><tr><td>Seed</td><td>762</td></tr><tr><td>Score Mode</td><td>full</td></tr></table>
-    <p class="prompt">English-Algerian fourth world, lo-fi indie post-math art-rock, fuzzy shoegaze guitars, neo-baroque minimalist horn and string quartet, dnb bass, trap subs, deadpan vocal fry, imperfect close-mic slacker delivery, angular clean chime riffs, hazy tape saturation, cassette hiss, dynamic swells, unpolished, 98 BPM</p>
-    <p class="prompt"><a href="data/maxxamogga.json">full record</a></p>
-  </details>
-</section>
+      <p>The gloss of the audio quality may obscure the reduction in temporal, timbre and melodic complexity, but it is
+        impossible to avoid the conclusion that <b>v.6 is the worst model Suno has made</b>. </p>
 
-<footer>Generated 2026-09-15 11:06. Audio in audio/, one JSON per track in data/, the whole playlist in index.json. Edit this file freely; rebuilding preserves the intro block.</footer>
-</div>
+      <p>For casual
+        centre-of-the-road, <em>fun</em> listening, it capably delivers. But for a
+        discerning listener-explorer, audiophiles, musicologists, ecentrics, or anyone with niche or avant-garde ideas,
+        Suno v.6
+        quickly evokes an allergic nausea. </p>
+
+      <p>V6 song architectures, melodic variations, temporal range, and timbral
+        diversity are all meh. The model is cosmetically superb but produces predictable subtle banality.</p>
+
+      <h2>Hyper-curated billboard boredom. Spectacle, not substance.</h2>
+
+      <p>Where 5.5 used to delight with surprising swerves and veers, 6 clings to the centroid localized minima of
+        corporate melodies and four-on-the-floor hooks. With 5 and 5.5 I remember a time when I wanted to keep
+        everything. Now I can&rsquo;t even listen past the first
+        terrible few bars of many of the v6 tracks. It's visceral. They somehow all evoke something already known,
+        something that died in an ad dept meeting. The creative aliveness is gone. The joy is dulled. The game is over.
+        Suno v6 got bought, ingested by the machine: it regurgitates, it
+        doesn&rsquo;t create.</p>
+
+      <h3>To put the creative collapse in perspective, here are the huge playlists I made when the tool was alive:
+      </h3>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="num"><a href="https://glia.ca/2025/71days" target="_blank" rel="noopener">71 days ⤴</a></div>
+          <div class="lbl"><strong>July 29, 2025 —
+              October 7, 2025</strong><br> • 266 tracks <br>• 3.75 tracks/day <br>• 12.8 minutes/day <br>• Total
+            : 15 hours 11 minutes 19 seconds
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="num"><a href="https://glia.ca/2025/75days/" target="_blank" rel="noopener">75 days ⤴</a></div>
+          <div class="lbl"><strong>Oct 13, 2025
+              &mdash; Dec 25, 2025</strong><br> • 422 tracks <br>• 5.63 tracks/day <br>• 17.9 min/day <br>• 22h 22m
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="num"><a href="https://glia.ca/2026/171days/" target="_blank" rel="noopener">173 days ⤴</a></div>
+          <div class="lbl"><strong>Jan 18, 2026
+              &mdash; Jul 9, 2026</strong><br> • 746 kept tracks <br> • 4.31 tracks/day <br> • 11.0 min/day <br> • 31h
+            47m
+          </div>
+        </div>
+      </div>
+
+      <p>I cannot envision myself finding anything equivalent in Suno v.6. The era of open innovation is over. The era
+        of commercialization has begun. Thus the proliferation of Warner-slop memes. Across genres Suno v.6 defaults to
+        a narrow bandwidth, replicating mainstream melodic memes designed to satisfy capitalist
+        west-centric bubble-gum slop-criteria.</p>
+
+      <p>It is disappointing to lose the older models, especially when replaced by algorithmic homogenization. The
+        tutorials don&rsquo;t help; I tried Simple mode just chatting with it. Occasionally a moment of revelation
+        emerges from that. But profit-driven &ldquo;clich&eacute;d local minima&rdquo; are baked into the current
+        generation&rsquo;s architecture. Even within Studio 2.0, the banality of v.6 permeates stem production.</p>
+
+      <blockquote>
+        <p>&ldquo;Older models including v5 and v5.5 have been retired, and there is no path to bring them back. v6 (v6,
+          v6-wild, and v6-mini) is now the current model family, and all new generation happens on v6. This isn&rsquo;t
+          a change that can be reversed &mdash; it&rsquo;s the direction the product has taken.</p>
+        <p>v6 was built in partnership with artists and producers including WMG and BMG &mdash; that&rsquo;s public...
+          Your point about algorithmic &lsquo;clich&eacute;d local minima&rsquo; and idiosyncratic voices is exactly the
+          kind of thing the product team should hear.&rdquo;</p>
+        <cite>&mdash; Suno Support AI Assistant, official reply (September 12, 2026)</cite>
+      </blockquote>
+
+      <h2>The 24-Hour Rebuttal: September 13–14, 2026</h2>
+      <p>If commercial AI music has willingly surrendered to corporate lobotomy, that is actually the best news
+        experimental music could have hoped for. The corporate nerf breaks the spell. It destroys any lingering illusion
+        that a closed, venture-backed, major-label-partnered cloud service would ever foster fringe artistic variation.
+      </p>
+
+      <p>And here is the rebuttal.</p>
+
+      <figure class="benchmark-figure">
+        <a href="https://huggingface.co/datasets/m-a-p/WildSongBench" target="_blank" rel="noopener">
+          <img src="img/sept12-2026-wildsongbench-frontier-teaser.png"
+            alt="WildSongBench Frontier Benchmark (September 12, 2026) showing YuE2 and YuE2 (Bo8) on the Pareto-optimal frontier compared to Suno v6 and older models"
+            class="benchmark-img">
+        </a>
+        <figcaption><a href="https://huggingface.co/datasets/m-a-p/WildSongBench" target="_blank"
+            rel="noopener">WildSongBench (September 12, 2026)</a>: YuE2 and YuE2 (Bo8) charting on the Pareto-optimal
+          frontier against proprietary models.</figcaption>
+      </figure>
+
+      <p><strong>Every single track on this index was created in one 24-hour period between September 13 and September
+          14, 2026.</strong></p>
+
+      <p>No studio subscription fees. No metered cloud generation credits. No Warner Music Group licensing handcuffs.
+      </p>
+
+      <p>All eight tracks below were rendered locally using <strong>YuE2</strong> &mdash; a completely free,
+        open-weights foundation music model running on my own Apple Silicon Mac Studio via a custom Gradio creation
+        interface.</p>
+
+      <p>In twenty-four hours of unconstrained local exploration, YuE2 proved what open weights can achieve when they
+        aren&rsquo;t castrated by corporate risk mitigation:</p>
+
+      <ul>
+        <li><strong>English-Algerian Fourth World Lo-Fi Art-Rock</strong> (<a href="#riverbed-clay">riverbed clay</a>,
+          <a href="#sleeping-shale">sleeping shale</a>, <a href="#maxxamogga">maxxamogga</a>): fuzzy shoegaze guitars
+          colliding with neo-baroque minimalist string and horn quartets, dnb bass, trap subs, and close-mic deadpan
+          delivery with authentic vocal fry.
+        </li>
+        <li><strong>Radical Multi-Movement Progressive Transitions</strong> (<a
+            href="#folded-beneath-what-listens">folded beneath what listens</a>): begins with fragile spectral ambient
+          choral drone and cello, builds into math clean indie guitars, erupts into heavy lofi trap beat drops with
+          gushing 808 subs and rolling ricochet hats, subsides into tape-decay ambient breakdown, and crescendos into an
+          oceanic tremolo shoegaze wall.</li>
+        <li><strong>Degraded Folktronica &amp; Emo Alt-Math</strong> (<a href="#syncopated-teeth">syncopated teeth</a>):
+          hesitant glitch, disk rot artifacts, tape degradation, analog synth warble, fragile acoustic picking, and
+          breathy intimacy.</li>
+        <li><strong>Intimate Cybernetic Sprung-Rhythm Trap</strong> (<a href="#brindled-baud-rate">brindled
+            baud-rate</a>): syncopated 808 sub-bass ricochets, tape flutter, and cybernetic cadences.</li>
+        <li><strong>Fractured Psychopastoral Chamber Trap</strong> (<a href="#bright-black-light">bright black
+            light</a>): root-emograss reframed with fractured 5/4 and 7/8 pulses beneath dusty lo-fi synths, bowed banjo
+          detuned into glass marimba, dense shifting jazz harmonies, and non-repeating math-break refrains.</li>
+        <li><strong>Trilingual Progressive Hybrid Epics</strong> (<a href="#behind-the-universe">behind the
+            universe</a>): English-Algerian-Chinese journey scaling from delicate ambient drones to an explosive
+          post-rock oceanic shimmer wall with soaring duet vocals.</li>
+      </ul>
+
+      <p>No corporate smoothing. No mandatory four-on-the-floor hooks. No generic, homogenized pop vocalists cloned from
+        radio playlists. Just raw, jagged, unpredictable sound design where odd time signatures, microtonal inflections,
+        vocal fry, and esoteric genre collisions actually hold together.</p>
+
+      <p>Every track on the index has its full generation parameters, seeds, and prompt recipes exposed. Listen to what
+        happens when music AI is free, local, and untamed.</p>
+
+    </div>
+    <!-- ===== /EDIT ME ===== -->
+
+    <div class="playlist-divider">
+      <h2>The 24-Hour Kept Takes (Sept 13–14, 2026)</h2>
+      <p>8 local renders from YuE2. Every prompt, seed, and sampler parameter preserved.</p>
+    </div>
+
+    <section class="track" id="riverbed-clay">
+      <h2>riverbed clay</h2>
+      <p class="meta"><span>★★★★</span><span>2m 40s</span><span>? · ? BPM</span><span>2026-09-13</span></p>
+      <audio controls preload="none" src="audio/riverbed-clay.mp3"></audio>
+      <!-- EDIT ME: note for this track -->
+      <p class="note"></p>
+      <details class="track-params">
+        <summary>parameters</summary>
+        <table>
+          <tr>
+            <td>Harmonic Exploration</td>
+            <td>0.7</td>
+          </tr>
+          <tr>
+            <td>Score Top-P</td>
+            <td>0.9</td>
+          </tr>
+          <tr>
+            <td>Score Repetition</td>
+            <td>1.005</td>
+          </tr>
+          <tr>
+            <td>Score Top-K</td>
+            <td>30</td>
+          </tr>
+          <tr>
+            <td>Score Penalty Window</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Wildness</td>
+            <td>1.35</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-P</td>
+            <td>0.95</td>
+          </tr>
+          <tr>
+            <td>Vocal Repetition</td>
+            <td>1.32</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-K</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Penalty Window</td>
+            <td>50</td>
+          </tr>
+          <tr>
+            <td>Min Length</td>
+            <td>200</td>
+          </tr>
+          <tr>
+            <td>Max Length</td>
+            <td>9000</td>
+          </tr>
+          <tr>
+            <td>CFG</td>
+            <td>1.0</td>
+          </tr>
+          <tr>
+            <td>Flow Steps</td>
+            <td>16</td>
+          </tr>
+          <tr>
+            <td>Seed</td>
+            <td>888</td>
+          </tr>
+          <tr>
+            <td>Score Mode</td>
+            <td>full</td>
+          </tr>
+        </table>
+        <p class="prompt">English-Algerian fourth world, lo-fi indie post-math art-rock, fuzzy shoegaze guitars,
+          neo-baroque minimalist horn and string quartet, dnb bass, trap subs, deadpan vocal fry, imperfect close-mic
+          slacker delivery, angular clean chime riffs, hazy tape saturation, cassette hiss, dynamic swells, unpolished,
+          98 BPM</p>
+        <p class="prompt"><a href="data/riverbed-clay.json">full record</a></p>
+      </details>
+    </section>
+
+    <section class="track" id="sleeping-shale">
+      <h2>sleeping shale</h2>
+      <p class="meta"><span>★★★★</span><span>1m 38s</span><span>D#m · 95 BPM</span><span>2026-09-13</span></p>
+      <audio controls preload="none" src="audio/sleeping-shale.mp3"></audio>
+      <!-- EDIT ME: note for this track -->
+      <p class="note"></p>
+      <details class="track-params">
+        <summary>parameters</summary>
+        <table>
+          <tr>
+            <td>Harmonic Exploration</td>
+            <td>0.7</td>
+          </tr>
+          <tr>
+            <td>Score Top-P</td>
+            <td>0.9</td>
+          </tr>
+          <tr>
+            <td>Score Repetition</td>
+            <td>1.005</td>
+          </tr>
+          <tr>
+            <td>Score Top-K</td>
+            <td>30</td>
+          </tr>
+          <tr>
+            <td>Score Penalty Window</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Wildness</td>
+            <td>1.25</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-P</td>
+            <td>0.95</td>
+          </tr>
+          <tr>
+            <td>Vocal Repetition</td>
+            <td>1.25</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-K</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Penalty Window</td>
+            <td>50</td>
+          </tr>
+          <tr>
+            <td>Min Length</td>
+            <td>200</td>
+          </tr>
+          <tr>
+            <td>Max Length</td>
+            <td>9000</td>
+          </tr>
+          <tr>
+            <td>CFG</td>
+            <td>1.2</td>
+          </tr>
+          <tr>
+            <td>Flow Steps</td>
+            <td>16</td>
+          </tr>
+          <tr>
+            <td>Seed</td>
+            <td>888</td>
+          </tr>
+          <tr>
+            <td>Score Mode</td>
+            <td>full</td>
+          </tr>
+        </table>
+        <p class="prompt">English-Algerian fourth world, lo-fi indie post-math art-rock, fuzzy shoegaze guitars,
+          neo-baroque minimalist horn and string quartet, dnb bass, trap subs, deadpan vocal fry, imperfect close-mic
+          slacker delivery, angular clean chime riffs, hazy tape saturation, cassette hiss, dynamic swells, unpolished,
+          98 BPM</p>
+        <p class="prompt"><a href="data/sleeping-shale.json">full record</a></p>
+      </details>
+    </section>
+
+    <section class="track" id="folded-beneath-what-listens">
+      <h2>folded beneath what listens</h2>
+      <p class="meta"><span>★★★★</span><span>2m 01s</span><span>Cm · ? BPM</span><span>2026-09-13</span></p>
+      <audio controls preload="none" src="audio/folded-beneath-what-listens.mp3"></audio>
+      <!-- EDIT ME: note for this track -->
+      <p class="note"></p>
+      <details class="track-params">
+        <summary>parameters</summary>
+        <table>
+          <tr>
+            <td>Harmonic Exploration</td>
+            <td>0.7</td>
+          </tr>
+          <tr>
+            <td>Score Top-P</td>
+            <td>0.9</td>
+          </tr>
+          <tr>
+            <td>Score Repetition</td>
+            <td>1.005</td>
+          </tr>
+          <tr>
+            <td>Score Top-K</td>
+            <td>30</td>
+          </tr>
+          <tr>
+            <td>Score Penalty Window</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Wildness</td>
+            <td>1.15</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-P</td>
+            <td>0.95</td>
+          </tr>
+          <tr>
+            <td>Vocal Repetition</td>
+            <td>1.24</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-K</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Penalty Window</td>
+            <td>50</td>
+          </tr>
+          <tr>
+            <td>Min Length</td>
+            <td>200</td>
+          </tr>
+          <tr>
+            <td>Max Length</td>
+            <td>9000</td>
+          </tr>
+          <tr>
+            <td>CFG</td>
+            <td>1.0</td>
+          </tr>
+          <tr>
+            <td>Flow Steps</td>
+            <td>16</td>
+          </tr>
+          <tr>
+            <td>Seed</td>
+            <td>444</td>
+          </tr>
+          <tr>
+            <td>Score Mode</td>
+            <td>full</td>
+          </tr>
+        </table>
+        <p class="prompt">English, progressive hybrid alt-indie lo-fi with drastic section transitions: begins with
+          fragile spectral ambient choral drone breathing and cello, builds into gentle math post-rock clean indie
+          guitars, erupts into heavy lofi trap beat drop with gushing 808 sub-bass and rolling ricochet hi-hats,
+          suddenly subsides into soft fragile tape-decay ambient breakdown, then crescendos into an subtle full
+          post-rock oceanic shimmer bedroom psychedelia wall of soaring tremolo guitars , neo-soul vocales and trap
+          drums, dynamic whispered to soaring duet vocals, 134 BPM</p>
+        <p class="prompt"><a href="data/folded-beneath-what-listens.json">full record</a></p>
+      </details>
+    </section>
+
+    <section class="track" id="syncopated-teeth">
+      <h2>syncopated teeth</h2>
+      <p class="meta"><span>★★★★</span><span>3m 58s</span><span>Dm · 86 BPM</span><span>2026-09-13</span></p>
+      <audio controls preload="none" src="audio/syncopated-teeth.mp3"></audio>
+      <!-- EDIT ME: note for this track -->
+      <p class="note"></p>
+      <details class="track-params">
+        <summary>parameters</summary>
+        <table>
+          <tr>
+            <td>Harmonic Exploration</td>
+            <td>0.7</td>
+          </tr>
+          <tr>
+            <td>Score Top-P</td>
+            <td>0.9</td>
+          </tr>
+          <tr>
+            <td>Score Repetition</td>
+            <td>1.005</td>
+          </tr>
+          <tr>
+            <td>Score Top-K</td>
+            <td>30</td>
+          </tr>
+          <tr>
+            <td>Score Penalty Window</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Wildness</td>
+            <td>1.0</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-P</td>
+            <td>0.95</td>
+          </tr>
+          <tr>
+            <td>Vocal Repetition</td>
+            <td>1.2</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-K</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Penalty Window</td>
+            <td>50</td>
+          </tr>
+          <tr>
+            <td>Min Length</td>
+            <td>200</td>
+          </tr>
+          <tr>
+            <td>Max Length</td>
+            <td>9000</td>
+          </tr>
+          <tr>
+            <td>CFG</td>
+            <td>1.0</td>
+          </tr>
+          <tr>
+            <td>Flow Steps</td>
+            <td>32</td>
+          </tr>
+          <tr>
+            <td>Seed</td>
+            <td>42</td>
+          </tr>
+          <tr>
+            <td>Score Mode</td>
+            <td>full</td>
+          </tr>
+        </table>
+        <p class="prompt">English, gentle experimental folktronica, emo alt post-math, hesitant glitch, disk rot
+          artifacts, tape degradation, analog synth warble, fragile acoustic picking, slow build, subtle shoegaze
+          breathy vocals with deadpan vocal fry, intimate, quiet, tape hiss, 84 BPM</p>
+        <p class="prompt"><a href="data/syncopated-teeth.json">full record</a></p>
+      </details>
+    </section>
+
+    <section class="track" id="brindled-baud-rate">
+      <h2>brindled baud-rate</h2>
+      <p class="meta"><span>★★★★</span><span>3m 52s</span><span>D#m · 75 BPM</span><span>2026-09-13</span></p>
+      <audio controls preload="none" src="audio/brindled-baud-rate.mp3"></audio>
+      <!-- EDIT ME: note for this track -->
+      <p class="note"></p>
+      <details class="track-params">
+        <summary>parameters</summary>
+        <table>
+          <tr>
+            <td>Harmonic Exploration</td>
+            <td>0.7</td>
+          </tr>
+          <tr>
+            <td>Score Top-P</td>
+            <td>0.9</td>
+          </tr>
+          <tr>
+            <td>Score Repetition</td>
+            <td>1.005</td>
+          </tr>
+          <tr>
+            <td>Score Top-K</td>
+            <td>30</td>
+          </tr>
+          <tr>
+            <td>Score Penalty Window</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Wildness</td>
+            <td>1.12</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-P</td>
+            <td>0.95</td>
+          </tr>
+          <tr>
+            <td>Vocal Repetition</td>
+            <td>1.15</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-K</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Penalty Window</td>
+            <td>50</td>
+          </tr>
+          <tr>
+            <td>Min Length</td>
+            <td>200</td>
+          </tr>
+          <tr>
+            <td>Max Length</td>
+            <td>9000</td>
+          </tr>
+          <tr>
+            <td>CFG</td>
+            <td>1.0</td>
+          </tr>
+          <tr>
+            <td>Flow Steps</td>
+            <td>16</td>
+          </tr>
+          <tr>
+            <td>Seed</td>
+            <td>777</td>
+          </tr>
+          <tr>
+            <td>Score Mode</td>
+            <td>full</td>
+          </tr>
+        </table>
+        <p class="prompt">English, intimate lofi trap merger, syncopated 808 sub-bass ricochets, tape flutter, imperfect
+          choral and duet whispers, cybernetic sprung-rhythm cadence, 128 BPM</p>
+        <p class="prompt"><a href="data/brindled-baud-rate.json">full record</a></p>
+      </details>
+    </section>
+
+    <section class="track" id="bright-black-light">
+      <h2>bright black light</h2>
+      <p class="meta"><span>★★★★</span><span>3m 45s</span><span>Dm · ? BPM</span><span>2026-09-13</span></p>
+      <audio controls preload="none" src="audio/bright-black-light.mp3"></audio>
+      <!-- EDIT ME: note for this track -->
+      <p class="note"></p>
+      <details class="track-params">
+        <summary>parameters</summary>
+        <table>
+          <tr>
+            <td>Harmonic Exploration</td>
+            <td>0.7</td>
+          </tr>
+          <tr>
+            <td>Score Top-P</td>
+            <td>0.9</td>
+          </tr>
+          <tr>
+            <td>Score Repetition</td>
+            <td>1.005</td>
+          </tr>
+          <tr>
+            <td>Score Top-K</td>
+            <td>30</td>
+          </tr>
+          <tr>
+            <td>Score Penalty Window</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Wildness</td>
+            <td>1.6</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-P</td>
+            <td>0.95</td>
+          </tr>
+          <tr>
+            <td>Vocal Repetition</td>
+            <td>1.4</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-K</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Penalty Window</td>
+            <td>50</td>
+          </tr>
+          <tr>
+            <td>Min Length</td>
+            <td>200</td>
+          </tr>
+          <tr>
+            <td>Max Length</td>
+            <td>9000</td>
+          </tr>
+          <tr>
+            <td>CFG</td>
+            <td>1.3</td>
+          </tr>
+          <tr>
+            <td>Flow Steps</td>
+            <td>16</td>
+          </tr>
+          <tr>
+            <td>Seed</td>
+            <td>777</td>
+          </tr>
+          <tr>
+            <td>Score Mode</td>
+            <td>full</td>
+          </tr>
+        </table>
+        <p class="prompt">Root-emograss trap reframed as slow fourth-world psychopastoral chamber: fractured 5/4 and 7/8
+          pulses beneath dusty Lo-Fi synths, bowed banjo detuned into glass marimba, shoegaze-ASMR vocal fry kept close
+          and breathy, dense shifting jazz harmonies, granular bass, abrupt math-break refrains non-repeating through
+          evolving lines, quirky prepared percussion and muted ensemble textures opening into a virtuoso choral-string
+          outro; intimate stereo saturation, restrained dynamics, wide but muddy, tenderly disorienting.</p>
+        <p class="prompt"><a href="data/bright-black-light.json">full record</a></p>
+      </details>
+    </section>
+
+    <section class="track" id="behind-the-universe">
+      <h2>behind the universe</h2>
+      <p class="meta"><span>★★★★</span><span>2m 31s</span><span>E · 65 BPM</span><span>2026-09-14</span></p>
+      <audio controls preload="none" src="audio/behind-the-universe.mp3"></audio>
+      <!-- EDIT ME: note for this track -->
+      <p class="note"></p>
+      <details class="track-params">
+        <summary>parameters</summary>
+        <table>
+          <tr>
+            <td>Harmonic Exploration</td>
+            <td>1.05</td>
+          </tr>
+          <tr>
+            <td>Score Top-P</td>
+            <td>0.96</td>
+          </tr>
+          <tr>
+            <td>Score Repetition</td>
+            <td>1.11</td>
+          </tr>
+          <tr>
+            <td>Score Top-K</td>
+            <td>55</td>
+          </tr>
+          <tr>
+            <td>Score Penalty Window</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Wildness</td>
+            <td>1.15</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-P</td>
+            <td>0.96</td>
+          </tr>
+          <tr>
+            <td>Vocal Repetition</td>
+            <td>1.22</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-K</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Penalty Window</td>
+            <td>50</td>
+          </tr>
+          <tr>
+            <td>Min Length</td>
+            <td>200</td>
+          </tr>
+          <tr>
+            <td>Max Length</td>
+            <td>9000</td>
+          </tr>
+          <tr>
+            <td>CFG</td>
+            <td>1.0</td>
+          </tr>
+          <tr>
+            <td>Flow Steps</td>
+            <td>16</td>
+          </tr>
+          <tr>
+            <td>Seed</td>
+            <td>555</td>
+          </tr>
+          <tr>
+            <td>Score Mode</td>
+            <td>full</td>
+          </tr>
+        </table>
+        <p class="prompt">English-Algerian-Chinese, experimental techno, progressive hybrid epic with drastic section
+          transitions: begins with fragile spectral ambient choral drone, builds into angular math rock clean indie
+          guitars, erupts into heavy lofi trap beat drop with gushing 808 sub-bass and rolling ricochet hi-hats,
+          suddenly subsides into soft fragile tape-decay ambient breakdown, then crescendos into an explosive post-rock
+          oceanic shimmer wall with soaring tremolo guitars and massive drums, dynamic whispered to soaring duet vocals,
+          134 BPM</p>
+        <p class="prompt"><a href="data/behind-the-universe.json">full record</a></p>
+      </details>
+    </section>
+
+    <section class="track" id="maxxamogga">
+      <h2>maxxamogga</h2>
+      <p class="meta"><span>★★★★</span><span>4m 26s</span><span>F#m · 100 BPM</span><span>2026-09-14</span></p>
+      <audio controls preload="none" src="audio/maxxamogga.mp3"></audio>
+      <!-- EDIT ME: note for this track -->
+      <p class="note"></p>
+      <details class="track-params">
+        <summary>parameters</summary>
+        <table>
+          <tr>
+            <td>Harmonic Exploration</td>
+            <td>0.7</td>
+          </tr>
+          <tr>
+            <td>Score Top-P</td>
+            <td>0.9</td>
+          </tr>
+          <tr>
+            <td>Score Repetition</td>
+            <td>1.005</td>
+          </tr>
+          <tr>
+            <td>Score Top-K</td>
+            <td>30</td>
+          </tr>
+          <tr>
+            <td>Score Penalty Window</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Wildness</td>
+            <td>1.33</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-P</td>
+            <td>0.95</td>
+          </tr>
+          <tr>
+            <td>Vocal Repetition</td>
+            <td>1.32</td>
+          </tr>
+          <tr>
+            <td>Semantic Top-K</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td>Vocal Penalty Window</td>
+            <td>50</td>
+          </tr>
+          <tr>
+            <td>Min Length</td>
+            <td>200</td>
+          </tr>
+          <tr>
+            <td>Max Length</td>
+            <td>9000</td>
+          </tr>
+          <tr>
+            <td>CFG</td>
+            <td>1.0</td>
+          </tr>
+          <tr>
+            <td>Flow Steps</td>
+            <td>16</td>
+          </tr>
+          <tr>
+            <td>Seed</td>
+            <td>762</td>
+          </tr>
+          <tr>
+            <td>Score Mode</td>
+            <td>full</td>
+          </tr>
+        </table>
+        <p class="prompt">English-Algerian fourth world, lo-fi indie post-math art-rock, fuzzy shoegaze guitars,
+          neo-baroque minimalist horn and string quartet, dnb bass, trap subs, deadpan vocal fry, imperfect close-mic
+          slacker delivery, angular clean chime riffs, hazy tape saturation, cassette hiss, dynamic swells, unpolished,
+          98 BPM</p>
+        <p class="prompt"><a href="data/maxxamogga.json">full record</a></p>
+      </details>
+    </section>
+
+    <footer>Generated 2026-09-15 11:06. Audio in audio/, one JSON per track in data/, the whole playlist in index.json.
+      Edit this file freely; rebuilding preserves the intro block.</footer>
+  </div>
 </body>
+
 </html>
