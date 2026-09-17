@@ -11,7 +11,11 @@ Runs on Apple Silicon (MPS). Nothing here calls a hosted service.
 
 | | |
 |---|---|
-| `app.py` | the Gradio studio — Creation, Sheet Music (ABC), Track Library, Star Analysis |
+| `app.py` | the Gradio studio — Create, Library, Analysis, FAQ |
+| `assets/studio.css` | the one stylesheet |
+| `assets/studio.js` | theme toggle, hover tips, sheet-music rendering |
+| `tooltips.py` | the hover text for every control |
+| `FAQ.md` | the FAQ tab's content — edit it, restart, done |
 | `analysis.py` | correlates 0–5 ratings against parameters, prompt shape, lyric shape and score metrics |
 | `sweep.py` | renders one prompt at a series of values for a single parameter, everything else fixed |
 | `backfill_metadata.py` | rebuilds `track.json` for renders made before the sidecar existed |
@@ -26,9 +30,33 @@ Runs on Apple Silicon (MPS). Nothing here calls a hosted service.
 python3 app.py          # http://127.0.0.1:7860
 ```
 
+## The interface
+
+Four tabs. **Create** holds everything a song is made of: the preset toolbar, the
+prompt and lyrics, the parameters, and — in a panel below them — the ABC score with
+its engraved staves. Three actions, each doing something the other two do not:
+
+| | |
+|---|---|
+| **Generate song** | score then audio, one pass |
+| **Write score only** | stage 1, ~20s, opens the score panel so you can edit the notation |
+| **Synthesize from this score** | stages 2–3 on whatever ABC is in the panel, hand edits included |
+
+Work written elsewhere comes in through **Open files** at the top of the tab: drop
+a `.abc` score and it lands in the score panel; drop a `prompt.md` and it fills the
+style box, and the lyrics box too when the file marks its lyrics with a `## Lyrics`
+heading or with `[Section]` tags. Pasting into the boxes works as well. A box you
+have already written in is never overwritten — clear it to let a file replace it.
+
+**Library** plays, rates, renames and publishes. **Analysis** is below. **FAQ** is
+`FAQ.md`.
+
+Engraved staves need `abcjs-basic-min.js` in `assets/`; it is not vendored here.
+Without it the score panel says so and everything else works.
+
 ## The loop
 
-Render → rate 0–5 → the Star Analysis tab says which parameter has never moved →
+Render → rate 0–5 → the Analysis tab says which parameter has never moved →
 `sweep.py` moves it → rate those → repeat.
 
 The distinction the ratings depend on: **unrated is not zero.** A track you never
