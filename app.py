@@ -1221,7 +1221,7 @@ def load_track_notes(track_name):
     return read_track_metadata(Path("outputs") / track_name).get("notes", "")
 
 
-PLAYLIST_DIR = Path("outputs") / "favorites_page"
+PLAYLIST_DIR = Path("docs")
 
 
 def _to_mp3(flac_path, dest, bitrate="320k"):
@@ -1249,26 +1249,155 @@ PLAYLIST_TEMPLATE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
 <style>
-  :root { --ink:#18181b; --muted:#71717a; --line:#e4e4e7; --bg:#fbfbfc; --accent:#7c3aed; }
+  :root {
+    color-scheme: light dark;
+    --ink: #18181b;
+    --muted: #71717a;
+    --line: #e4e4e7;
+    --bg: #fbfbfc;
+    --accent: #7c3aed;
+    --card-bg: rgba(124, 58, 237, 0.035);
+  }
   @media (prefers-color-scheme: dark) {
-    :root { --ink:#ededf0; --muted:#a1a1aa; --line:#2a2a31; --bg:#151518; --accent:#a78bfa; }
+    :root {
+      --ink: #ededf0;
+      --muted: #a1a1aa;
+      --line: #2a2a31;
+      --bg: #151518;
+      --accent: #a78bfa;
+      --card-bg: rgba(167, 139, 250, 0.05);
+    }
   }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink);
-         font:15px/1.65 ui-sans-serif,-apple-system,"Helvetica Neue",sans-serif; }
-  .wrap { max-width: 760px; margin: 0 auto; padding: 48px 20px 96px; }
-  h1 { font-size: 1.7rem; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); font-size: 0.88rem; margin: 0 0 36px; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 40px 20px 96px; }
 
-  /* ---- EDIT ME: intro text ---- */
-  .intro { margin: 0 0 40px; }
-  .intro p { margin: 0 0 14px; }
+  .hero-img {
+    width: 100%;
+    height: auto;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+    display: block;
+    margin: 0 0 32px;
+  }
+
+  h1 { font-size: 1.85rem; font-weight: 750; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 32px; }
+
+  .intro { margin: 0 0 44px; }
+  .intro p { margin: 0 0 16px; line-height: 1.75; font-size: 1.02rem; }
+  .intro h2 { font-size: 1.3rem; font-weight: 700; margin: 36px 0 14px; letter-spacing: -0.01em; color: var(--ink); }
+  .intro h3 { font-size: 1.1rem; font-weight: 650; margin: 26px 0 10px; color: var(--ink); }
+  .intro blockquote {
+    margin: 22px 0;
+    padding: 14px 18px;
+    border-left: 3px solid var(--accent);
+    background: var(--card-bg);
+    border-radius: 0 8px 8px 0;
+    color: var(--ink);
+    font-size: 0.94rem;
+    line-height: 1.65;
+  }
+  .intro blockquote p { margin: 0 0 8px; font-size: 0.94rem; }
+  .intro blockquote p:last-child { margin-bottom: 0; }
+  .intro blockquote cite { display: block; margin-top: 10px; font-size: 0.8rem; color: var(--muted); font-style: normal; font-weight: 600; }
+  .intro ul { margin: 12px 0 20px 20px; padding: 0; }
+  .intro li { margin-bottom: 10px; line-height: 1.65; font-size: 0.98rem; }
+  .intro a { color: var(--accent); text-decoration: none; font-weight: 500; }
+  .intro a:hover { text-decoration: underline; }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin: 24px 0 28px;
+  }
+  @media (max-width: 680px) {
+    .stat-grid { grid-template-columns: 1fr; }
+  }
+  .stat-card {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+    background: var(--card-bg);
+  }
+  .stat-card .num {
+    font-size: 1.18rem;
+    font-weight: 700;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-card .num a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .stat-card .num a:hover {
+    text-decoration: underline;
+  }
+  .stat-card .lbl {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-top: 4px;
+    line-height: 1.4;
+  }
+  .stat-card .lbl a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .stat-card .lbl a:hover {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+
+  .playlist-divider {
+    border-top: 2px solid var(--line);
+    margin: 48px 0 28px;
+    padding-top: 24px;
+  }
+  .playlist-divider h2 {
+    font-size: 1.4rem;
+    font-weight: 750;
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+  .playlist-divider p {
+    color: var(--muted);
+    font-size: 0.88rem;
+    margin: 0;
+  }
 
   .track { border-top: 1px solid var(--line); padding: 26px 0; }
-  .track h2 { font-size: 1.06rem; font-weight: 650; margin: 0 0 2px; }
+  .track h2 { font-size: 1.08rem; font-weight: 650; margin: 0 0 2px; }
   .meta { color: var(--muted); font-size: 0.8rem; margin: 0 0 12px; }
   .meta span + span::before { content: " · "; }
-  audio { width: 100%; margin: 6px 0 12px; }
+
+  /* Refined MP3 Player Styling */
+  audio {
+    width: 100%;
+    height: 38px;
+    margin: 8px 0 14px;
+    border-radius: 20px;
+    accent-color: var(--accent);
+    background: var(--card-bg);
+    border: 1px solid var(--line);
+    outline: none;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  audio:hover, audio:focus {
+    border-color: var(--accent);
+    box-shadow: 0 2px 10px rgba(124, 58, 237, 0.12);
+  }
+  audio::-webkit-media-controls-panel,
+  audio::-webkit-media-controls-enclosure {
+    background: transparent;
+  }
   .note { margin: 10px 0 0; }
   .note:empty { display: none; }
   details { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px;
@@ -1291,6 +1420,8 @@ PLAYLIST_TEMPLATE = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
+
+<img class="hero-img" src="img/suno-shit-header.jpg" alt="Suno v.6 is a pile of shit — that's good news for experimental music" width="1920" height="1080">
 
 <h1>__TITLE__</h1>
 <p class="sub">__SUBTITLE__</p>
