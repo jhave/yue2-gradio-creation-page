@@ -448,5 +448,24 @@
     "flow_steps": 16,
     "seed": 404,
     "cot_mode": "full"
+  },
+  "cruft the ledger": {
+    "score_temp": 0.8,
+    "score_top_p": 0.9,
+    "score_rep_pen": 1.01,
+    "score_top_k": 35,
+    "score_pen_win": 100,
+    "sem_temp": 1.15,
+    "sem_top_p": 0.95,
+    "rep_pen": 1.18,
+    "sem_top_k": 105,
+    "sem_pen_win": 54,
+    "sem_min_tokens": 200,
+    "sem_max_tokens": 9000,
+    "cfg_scale": 1.0,
+    "flow_steps": 12,
+    "seed": 20260916,
+    "cot_mode": "full",
+    "updated_at": "2026-09-17 17:22:16"
   }
 }

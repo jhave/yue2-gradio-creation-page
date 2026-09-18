@@ -370,7 +370,7 @@ def parse_request_json(text):
 
 
 def load_dropped_files(files, current_title, current_style, current_lyrics,
-                       current_abc, overwrite=True):
+                       current_abc, overwrite=True, reset_params=False):
     """
     Read dropped or chosen files into the right fields.
 
@@ -382,6 +382,12 @@ def load_dropped_files(files, current_title, current_style, current_lyrics,
     to: a preset is loaded into every box at startup, so "fill only the empty
     ones" meant a drop landed nowhere. Turn it off to protect work in progress.
     The track title is taken from the JSON id, the ABC T: field, or the filename.
+
+    A request.json rarely names all 16 parameters — most name seed and cot and
+    nothing else — so the rest keep the values the current sound left in them.
+    `reset_params` puts those back to their defaults instead, which is what
+    makes a render reproducible from the file alone. Either way the status line
+    says which parameters moved and how many did not.
     """
     blank_params = [gr.update() for _ in PARAM_KEYS]
     if not files:
@@ -393,6 +399,7 @@ def load_dropped_files(files, current_title, current_style, current_lyrics,
 
     new_abc, new_style, new_lyrics, title_from = None, None, None, ""
     new_params = {}
+    saw_json = False
     read, skipped = [], []
 
     for path in paths:
@@ -408,6 +415,7 @@ def load_dropped_files(files, current_title, current_style, current_lyrics,
                   or bool(re.match(r"^\s*X:\s*\d", text)))
 
         if path.suffix.lower() == ".json":
+            saw_json = True
             try:
                 fields, params = parse_request_json(text)
             except (ValueError, json.JSONDecodeError) as exc:
@@ -462,6 +470,9 @@ def load_dropped_files(files, current_title, current_style, current_lyrics,
     if title_from and (overwrite or not (current_title or "").strip()):
         title_u = gr.update(value=sanitize_song_id(title_from))
 
+    if saw_json and reset_params:
+        for key in PARAM_KEYS:
+            new_params.setdefault(key, PARAM_DEFAULTS[key])
     param_u = [gr.update(value=new_params[k]) if k in new_params else gr.update()
                for k in PARAM_KEYS]
 
@@ -480,6 +491,13 @@ def load_dropped_files(files, current_title, current_style, current_lyrics,
         msg.append("Set " + ", ".join(
             f"{PARAM_LABELS.get(k, k)} {new_params[k]}" for k in PARAM_KEYS
             if k in new_params) + ".")
+    untouched = [k for k in PARAM_KEYS if k not in new_params]
+    if saw_json and untouched:
+        # Silence here read as a bug: the file was loaded, the parameters did
+        # not move, and nothing said the file had not asked them to.
+        msg.append(f"The file names no value for the other {len(untouched)} "
+                   f"parameters, so they keep the current sound's — tick "
+                   f"**reset** to send those to their defaults instead.")
     if skipped:
         msg.append("Skipped " + ", ".join(skipped) + ".")
 
@@ -2979,10 +2997,16 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                     height=110,
                     elem_id="tip-drop"
                 )
-                drop_overwrite = gr.Checkbox(
-                    value=True, label="replace boxes that already have text",
-                    elem_id="tip-drop-overwrite", container=False
-                )
+                with gr.Row():
+                    drop_overwrite = gr.Checkbox(
+                        value=True, label="replace boxes that already have text",
+                        elem_id="tip-drop-overwrite", container=False
+                    )
+                    drop_reset_params = gr.Checkbox(
+                        value=False,
+                        label="reset parameters the file does not name",
+                        elem_id="tip-drop-reset", container=False
+                    )
                 drop_status = gr.Markdown("", elem_classes=["toolbar-status-inline"])
 
             with gr.Row():
@@ -3632,7 +3656,7 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     dropped_files.upload(
         load_dropped_files,
         inputs=[dropped_files, custom_title, style_input, lyrics_input, abc_editor,
-                drop_overwrite],
+                drop_overwrite, drop_reset_params],
         outputs=[custom_title, style_input, lyrics_input, abc_editor,
                  score_panel, drop_status] + PARAM_COMPONENTS
     ).then(

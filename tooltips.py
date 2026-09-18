@@ -166,3 +166,11 @@ TOOLTIPS["tip-save-song"] = (
     "Saves title, prompt, lyrics and score under the name in the box beside it. "
     "The parameters are not touched."
 )
+
+
+TOOLTIPS["tip-drop-reset"] = (
+    "A request.json usually names only a few parameters — seed and score mode, "
+    "typically — and the rest keep whatever the current sound left in them. On, "
+    "the ones the file does not name go to their defaults, so the render is "
+    "reproducible from the file alone. Off, your sound stays as it is."
+)
