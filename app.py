@@ -3157,11 +3157,16 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                     with gr.Column(scale=5):
                         abc_editor = gr.Code(
                             label="ABC notation — editable",
-                            language="markdown", lines=16, max_lines=26, value=""
+                            language="markdown", lines=16, max_lines=26, value="",
+                            elem_classes=["score-pane"]
                         )
                         with gr.Row():
                             render_sheet_btn = gr.Button("Draw the staves", size="sm",
                                                          elem_classes=["btn-secondary"])
+                            download_staves_btn = gr.Button(
+                                "Download staves", size="sm",
+                                elem_classes=["btn-secondary"], elem_id="tip-download-staves"
+                            )
                             sheet_state = gr.Markdown("", elem_classes=["sheet-state"])
                         metrics_display = gr.Markdown(
                             "*Write a score, or paste ABC above, to see section timings.*"
@@ -3673,6 +3678,10 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     # ------------------------------------------------------------ score panel
     # Staves redraw on demand, not on every keystroke: engraving a full score is
     # expensive and the ABC text is authoritative either way.
+    # The engraved staves are an SVG in the page; saving it is a browser job,
+    # so nothing round-trips to Python here.
+    download_staves_btn.click(None, js="() => window.downloadStaves()")
+
     render_sheet_btn.click(
         staves_mark, inputs=[abc_editor], outputs=[sheet_state]
     ).then(

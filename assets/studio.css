@@ -509,8 +509,8 @@ div.toolbar-label {
     color: #0f172a !important;
     padding: 18px !important;
     border-radius: 10px !important;
-    min-height: 620px;
-    max-height: 1400px;
+    height: var(--score-pane-h);
+    max-height: none;
     overflow: auto !important;
     border: 1px solid var(--border);
     box-shadow: var(--shadow);
@@ -584,3 +584,15 @@ button.yue-tip-target { text-decoration: none !important; }
 
 /* One status line for every render, directly above the one player. */
 .render-status     { font-size: 0.85rem !important; min-height: 1.2em; }
+
+
+/* ----------------------------------------------- score pane, both halves --- */
+/* The ABC and the staves are two views of one thing, so they are one height.
+   The staves panel used to be half as tall as the editor beside it, which is
+   why a drawn score read as nothing having happened. */
+:root { --score-pane-h: 640px; }
+
+.score-pane .cm-editor,
+.score-pane .cm-scroller,
+.score-pane > div > div { height: var(--score-pane-h) !important; max-height: none !important; }
+.score-pane .cm-scroller { overflow: auto !important; }

@@ -71,6 +71,55 @@
     });
   };
 
+  /* ---------------------------------------------------- saving the staves --- */
+  // abcjs engraves into an inline <svg>. Saving it means serialising that node
+  // with its computed font, since the page's stylesheet does not travel with it.
+  window.downloadStaves = function () {
+    var paper = document.getElementById("sheet-music-paper");
+    var svgs = paper ? paper.querySelectorAll("svg") : [];
+    if (!svgs.length) {
+      if (paper) {
+        var note = paper.querySelector(".sheet-placeholder");
+        if (note) note.textContent = "Nothing engraved yet — press Draw the staves first.";
+      }
+      return;
+    }
+
+    // A long score engraves as several stacked <svg> blocks, one per system.
+    // They are stitched into one document so the file is the whole score.
+    var width = 0, height = 0, parts = [];
+    svgs.forEach(function (svg) {
+      var w = svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width
+            || svg.width.baseVal.value || 800;
+      var h = svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.height
+            || svg.height.baseVal.value || 200;
+      parts.push('<g transform="translate(0,' + height + ')">' + svg.innerHTML + "</g>");
+      width = Math.max(width, w);
+      height += h;
+    });
+
+    var doc = '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<svg xmlns="http://www.w3.org/2000/svg" '
+      + 'xmlns:xlink="http://www.w3.org/1999/xlink" '
+      + 'width="' + width + '" height="' + height + '" '
+      + 'viewBox="0 0 ' + width + " " + height + '">'
+      + '<style>text{font-family:serif}</style>'
+      + '<rect width="100%" height="100%" fill="#ffffff"/>'
+      + parts.join("") + "</svg>";
+
+    var name = (document.querySelector("#tip-title input") || {}).value || "score";
+    name = name.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "score";
+
+    var url = URL.createObjectURL(new Blob([doc], { type: "image/svg+xml" }));
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = name + "-staves.svg";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  };
+
   /* ----------------------------------------------------------- tooltips --- */
   function initTips() {
     if (!document.body) { requestAnimationFrame(initTips); return; }

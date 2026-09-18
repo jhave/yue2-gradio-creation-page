@@ -174,3 +174,11 @@ TOOLTIPS["tip-drop-reset"] = (
     "the ones the file does not name go to their defaults, so the render is "
     "reproducible from the file alone. Off, your sound stays as it is."
 )
+
+
+TOOLTIPS["tip-download-staves"] = (
+    "Saves the engraved staves as an SVG — the whole score, with every system "
+    "stitched into one file, on a white background. Vector, so it scales for "
+    "print. Draw the staves first; the ABC text itself downloads from the icon "
+    "at the top right of the editor."
+)
