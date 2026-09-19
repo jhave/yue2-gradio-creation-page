@@ -182,3 +182,10 @@ TOOLTIPS["tip-download-staves"] = (
     "print. Draw the staves first; the ABC text itself downloads from the icon "
     "at the top right of the editor."
 )
+
+
+TOOLTIPS["tip-sort"] = (
+    "stars: best first, and tracks you have not rated yet below them — unrated "
+    "means not yet judged, not judged badly. newest: most recent first, which is "
+    "where a render you just made will be."
+)

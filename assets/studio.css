@@ -596,3 +596,61 @@ button.yue-tip-target { text-decoration: none !important; }
 .score-pane .cm-scroller,
 .score-pane > div > div { height: var(--score-pane-h) !important; max-height: none !important; }
 .score-pane .cm-scroller { overflow: auto !important; }
+
+
+/* ------------------------------------------------------------ track list --- */
+/* The rows are a list, not a spreadsheet. Gradio gives read-only cells the same
+   affordances as editable ones — they take focus and grow on click, which reads
+   as "edit me" and does nothing. Each track is one line; the row is the control.
+   Gradio 6 renders cells as [role="gridcell"] wrapping an inner .cell div, so
+   both are addressed. */
+.track-table table { table-layout: fixed; }
+
+.track-table [role="gridcell"],
+.track-table [role="columnheader"],
+.track-table [role="gridcell"] > div,
+.track-table [role="columnheader"] > div {
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    font-size: 0.84rem !important;
+    line-height: 1.55 !important;
+    min-height: 0 !important;
+}
+.track-table [role="gridcell"] { padding: 3px 8px !important; }
+
+/* The cell cannot take focus or expand; the click reaches the row instead. */
+.track-table [role="gridcell"] > div,
+.track-table [role="gridcell"] span { pointer-events: none !important; }
+
+.track-table [role="row"] { cursor: pointer !important; }
+.track-table [role="row"]:hover [role="gridcell"] {
+    background: var(--card-hover, rgba(124, 58, 237, 0.07)) !important;
+}
+
+/* stars and the playing marker */
+.track-table [role="row"] [role="gridcell"]:nth-child(1),
+.track-table [role="row"] [role="gridcell"]:nth-child(1) > div {
+    color: var(--accent) !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.5px !important;
+}
+/* the title, in text rather than the grid's monospace */
+.track-table [role="row"] [role="gridcell"]:nth-child(2) > div {
+    font-family: inherit !important;
+}
+/* the settings tag, and the date */
+.track-table [role="row"] [role="gridcell"]:nth-child(4) > div {
+    color: var(--muted) !important;
+    font-size: 0.76rem !important;
+}
+.track-table [role="row"] [role="gridcell"]:nth-child(5) > div {
+    color: var(--muted) !important;
+}
+
+.table-hint {
+    font-size: 0.76rem !important;
+    color: var(--muted);
+    margin: 2px 0 4px 0 !important;
+}
+.table-hint p { margin: 0 !important; }

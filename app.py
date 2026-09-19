@@ -2691,16 +2691,63 @@ def filter_by_rating(tracks, min_rating_label):
     return [t for t in tracks if t.get("rating") is not None and t["rating"] >= floor]
 
 
-def get_track_table(min_rating_label="all", playing=None):
-    """Format track table for Gradio Dataframe. `playing` gets a ▶ marker."""
-    tracks = filter_by_rating(get_track_data(), min_rating_label)
+# A folder name is built for sorting and for carrying its settings —
+# 2026-09-16_102538_parasol_gentle_math_[hx.8_stp.97_srp1.018_stk80_etc] — which
+# makes it unreadable as a list entry. The date is already a column, the tag
+# belongs in a column of its own, and what is left is the name of the piece.
+_STAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[_-]\d{6}[_-]")
+_TAG_RE = re.compile(r"_?\[([^\]]*)\]\s*$")
+
+
+def split_track_name(folder_name):
+    """(title, settings tag) out of a render folder's name."""
+    stem = _STAMP_RE.sub("", folder_name or "")
+    tag = ""
+    m = _TAG_RE.search(stem)
+    if m:
+        tag = m.group(1)
+        stem = stem[:m.start()]
+    return stem.replace("_", " ").strip(" -"), tag
+
+
+def track_line(track, meta=None):
+    """What one row says: a title a person would recognise, and its settings."""
+    meta = meta if meta is not None else read_track_metadata(Path(track["path"]))
+    title, tag = split_track_name(track["name"])
+    shown = (meta.get("display_name") or "").strip() or title or track["name"]
+    return shown, tag
+
+
+def sort_tracks(tracks, by="stars"):
+    """
+    Rated first, best first. Unrated sit below, newest first, because an
+    unrated track is one not yet judged rather than one judged badly.
+    """
+    if by == "newest":
+        return list(tracks)
+    return sorted(
+        tracks,
+        key=lambda t: (0 if t.get("rating") is not None else 1,
+                       -(t.get("rating") or 0)),
+    )
+
+
+def get_track_table(min_rating_label="all", playing=None, sort_by="stars"):
+    """One line per track: playing marker and stars, title, length, settings, date."""
+    tracks = sort_tracks(filter_by_rating(get_track_data(), min_rating_label), sort_by)
     rows = []
     for t in tracks:
+        shown, tag = track_line(t)
         mark = "▶" if playing and t["name"] == playing else ""
-        stars = rating_stars(t.get("rating"))
-        rows.append([f"{mark} {stars}".strip(), t["name"], t["duration"],
-                     t["key_bpm"], t["size"], t["date"]])
+        stars = rating_stars(t.get("rating")) or "·"
+        rows.append([f"{mark}{stars}".strip(), shown, t["duration"], tag or "—", t["date"]])
     return rows
+
+
+def table_names(min_rating_label="all", sort_by="stars"):
+    """Folder names in the order the table shows them, so a row index resolves."""
+    return [t["name"] for t in
+            sort_tracks(filter_by_rating(get_track_data(), min_rating_label), sort_by)]
 
 
 def select_track_by_name(name):
@@ -3189,6 +3236,11 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                                                elem_classes=["btn-secondary"])
                         play_system_btn = gr.Button("Play in macOS player", size="sm",
                                                     elem_classes=["btn-secondary"])
+                        sort_by_dd = gr.Dropdown(
+                            choices=["stars", "newest"], value="stars",
+                            label="", show_label=False, container=False,
+                            scale=0, min_width=110, elem_id="tip-sort"
+                        )
                         favs_only_check = gr.Dropdown(
                             choices=FILTER_CHOICES, value="all", label="", show_label=False,
                             interactive=True, scale=0, min_width=150,
@@ -3200,11 +3252,14 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                         choices=[], interactive=True
                     )
 
+                    gr.Markdown("Click a row to play it. Stars are set on the "
+                                "player's rating row, not here.",
+                                elem_classes=["table-hint"])
                     track_table = gr.Dataframe(
-                        headers=["★", "Track Folder", "Duration", "Key & BPM", "Size", "Created Date"],
-                        datatype=["str", "str", "str", "str", "str", "str"],
-                        column_widths=["4%", "40%", "12%", "16%", "12%", "16%"],
-                        interactive=False, wrap=True
+                        headers=["★", "Track", "Length", "Settings", "Made"],
+                        datatype=["str", "str", "str", "str", "str"],
+                        column_widths=["8%", "38%", "12%", "23%", "19%"],
+                        interactive=False, wrap=False, elem_classes=["track-table"]
                     )
 
                     with gr.Accordion("Favourites playlist", open=False) as favs_panel:
@@ -3294,20 +3349,30 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                         save_notes_btn = gr.Button("Save notes", size="sm",
                                                    elem_classes=["btn-secondary"])
 
-            def refresh_ui(min_rating_label="all", current=None):
-                """Rebuild the list without yanking the user off the track they chose."""
-                tracks = filter_by_rating(get_track_data(), min_rating_label)
-                choices = [t["name"] for t in tracks]
-                keep = current if current in choices else (choices[0] if choices else None)
-                table = get_track_table(min_rating_label, keep)
-                return gr.update(choices=choices, value=keep), gr.update(value=table)
+            def refresh_ui(min_rating_label="all", current=None, sort_by="stars"):
+                """
+                Rebuild the list without choosing anything.
 
-            def on_table_select(evt: gr.SelectData, min_rating_label="all"):
+                Falling back to choices[0] is what made entering the tab start
+                playing: the dropdown was written, its change fired, the track
+                loaded into an autoplaying player. Nothing is selected unless a
+                person selects it.
+                """
+                names = table_names(min_rating_label, sort_by)
+                keep = current if current in names else None
+                table = get_track_table(min_rating_label, keep, sort_by)
+                return gr.update(choices=names, value=keep), gr.update(value=table)
+
+            def refresh_table_only(min_rating_label="all", current=None, sort_by="stars"):
+                """For entering the tab: the list may have changed, the playback has not."""
+                return gr.update(value=get_track_table(min_rating_label, current, sort_by))
+
+            def on_table_select(evt: gr.SelectData, min_rating_label="all", sort_by="stars"):
                 if evt and evt.index and len(evt.index) > 0:
+                    names = table_names(min_rating_label, sort_by)
                     row = evt.index[0]
-                    tracks = filter_by_rating(get_track_data(), min_rating_label)
-                    if 0 <= row < len(tracks):
-                        return tracks[row]["name"]
+                    if 0 <= row < len(names):
+                        return names[row]
                 return gr.update()
 
             def export_favorites():
@@ -3335,17 +3400,26 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                 out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
                 return f"Wrote `{out}` — {len(payload)} favourite(s)."
 
-            track_table.select(on_table_select, inputs=[favs_only_check], outputs=[track_selector])
-            library_tab.select(refresh_ui, inputs=[favs_only_check, track_selector], outputs=[track_selector, track_table])
-            refresh_lib_btn.click(refresh_ui, inputs=[favs_only_check, track_selector], outputs=[track_selector, track_table])
-            favs_only_check.change(refresh_ui, inputs=[favs_only_check, track_selector], outputs=[track_selector, track_table])
+            track_table.select(on_table_select, inputs=[favs_only_check, sort_by_dd],
+                               outputs=[track_selector])
+
+            # Entering the tab refreshes the list and touches nothing else.
+            # Writing track_selector here is what restarted the top track on
+            # every visit, and stopped whatever was already playing.
+            library_tab.select(refresh_table_only,
+                               inputs=[favs_only_check, track_selector, sort_by_dd],
+                               outputs=[track_table])
+            for source in (refresh_lib_btn.click, favs_only_check.change, sort_by_dd.change):
+                source(refresh_ui, inputs=[favs_only_check, track_selector, sort_by_dd],
+                       outputs=[track_selector, track_table])
 
             lib_rating.input(
                 set_rating,
                 inputs=[track_selector, lib_rating],
                 outputs=[lib_rating, rename_status]
             ).then(
-                refresh_ui, inputs=[favs_only_check, track_selector], outputs=[track_selector, track_table]
+                refresh_ui, inputs=[favs_only_check, track_selector, sort_by_dd],
+                outputs=[track_selector, track_table]
             ).then(
                 favorites_playlist_markdown, outputs=[favs_playlist]
             )
@@ -3414,7 +3488,7 @@ with gr.Blocks(title="YuE2 Studio") as demo:
             )
             track_selector.change(
                 get_track_table,
-                inputs=[favs_only_check, track_selector],
+                inputs=[favs_only_check, track_selector, sort_by_dd],
                 outputs=[track_table]
             )
             track_selector.change(
@@ -3560,6 +3634,13 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     def lock_actions():
         return [gr.update(interactive=False)] * len(ACTIONS)
 
+    def silence_library():
+        """
+        One pair of ears. Starting a render clears the library player, so a
+        track left playing on the other tab does not talk over the result.
+        """
+        return gr.update(value=None)
+
     def unlock_actions(abc_text):
         """Back on afterwards — except the two that need a score, if there is none."""
         has_score = bool((abc_text or "").strip())
@@ -3591,6 +3672,8 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     generate_btn.click(
         lock_actions, outputs=ACTIONS
     ).then(
+        silence_library, outputs=[library_audio]
+    ).then(
         one_click_generate_step,
         inputs=([style_input, lyrics_input, custom_title] + PARAM_COMPONENTS
                 + [append_tag_check, audio_format_dd, sound_dropdown, song_dropdown]),
@@ -3609,6 +3692,8 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     # written to a tab the user was not on.
     plan_btn.click(
         lock_actions, outputs=ACTIONS
+    ).then(
+        silence_library, outputs=[library_audio]
     ).then(
         generate_plan_step,
         inputs=[
@@ -3633,6 +3718,8 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     render_score_btn.click(
         lock_actions, outputs=ACTIONS
     ).then(
+        silence_library, outputs=[library_audio]
+    ).then(
         synthesize_audio_step,
         inputs=render_inputs,
         outputs=[audio_output, studio_status, last_render_state]
@@ -3645,6 +3732,8 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     # The opening 20 seconds, cheap, to hear whether the score is worth the wait.
     preview_btn.click(
         lock_actions, outputs=ACTIONS
+    ).then(
+        silence_library, outputs=[library_audio]
     ).then(
         preview_audio_step,
         inputs=render_inputs,
