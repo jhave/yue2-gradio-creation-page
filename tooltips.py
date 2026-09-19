@@ -189,3 +189,16 @@ TOOLTIPS["tip-sort"] = (
     "means not yet judged, not judged badly. newest: most recent first, which is "
     "where a render you just made will be."
 )
+
+
+TOOLTIPS["tip-use-settings"] = (
+    "Puts this track's 16 parameters into the Create tab and takes you there. "
+    "The prompt, lyrics and score you have open stay as they are — this is "
+    "'render what I am working on with that track's sound'."
+)
+
+TOOLTIPS["tip-use-track"] = (
+    "Puts the whole render into the Create tab: prompt, lyrics, score and all "
+    "16 parameters, then takes you there. Use it to make a variation — change "
+    "the seed, or one slider, and render again."
+)

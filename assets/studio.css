@@ -624,28 +624,48 @@ button.yue-tip-target { text-decoration: none !important; }
 .track-table [role="gridcell"] span { pointer-events: none !important; }
 
 .track-table [role="row"] { cursor: pointer !important; }
+
+/* A read-only cell that draws a focus ring still looks like a field waiting
+   for input. The row's own highlight is the only selection feedback wanted. */
+.track-table [role="gridcell"],
+.track-table [role="gridcell"]:focus,
+.track-table [role="gridcell"]:focus-within,
+.track-table [role="gridcell"] > div:focus {
+    outline: none !important;
+    box-shadow: none !important;
+    border-color: transparent !important;
+}
+.track-table [role="gridcell"] input,
+.track-table [role="gridcell"] textarea { pointer-events: none !important; }
 .track-table [role="row"]:hover [role="gridcell"] {
     background: var(--card-hover, rgba(124, 58, 237, 0.07)) !important;
 }
 
-/* stars and the playing marker */
+/* 1: the playing marker, in a column of its own so the stars keep their width */
 .track-table [role="row"] [role="gridcell"]:nth-child(1),
 .track-table [role="row"] [role="gridcell"]:nth-child(1) > div {
     color: var(--accent) !important;
-    font-weight: 600 !important;
-    letter-spacing: -0.5px !important;
+    padding-right: 0 !important;
+    text-align: center !important;
 }
-/* the title, in text rather than the grid's monospace */
+/* 2: the stars — five of them must fit without an ellipsis */
+.track-table [role="row"] [role="gridcell"]:nth-child(2),
 .track-table [role="row"] [role="gridcell"]:nth-child(2) > div {
+    color: var(--accent) !important;
+    font-weight: 600 !important;
+    letter-spacing: -1px !important;
+    font-size: 0.8rem !important;
+    padding-left: 2px !important;
+}
+/* 3: the title, in text rather than the grid's monospace */
+.track-table [role="row"] [role="gridcell"]:nth-child(3) > div {
     font-family: inherit !important;
 }
-/* the settings tag, and the date */
-.track-table [role="row"] [role="gridcell"]:nth-child(4) > div {
-    color: var(--muted) !important;
-    font-size: 0.76rem !important;
-}
+/* 4-5: length and date, quieter */
+.track-table [role="row"] [role="gridcell"]:nth-child(4) > div,
 .track-table [role="row"] [role="gridcell"]:nth-child(5) > div {
     color: var(--muted) !important;
+    font-size: 0.78rem !important;
 }
 
 .table-hint {
@@ -654,3 +674,16 @@ button.yue-tip-target { text-decoration: none !important; }
     margin: 2px 0 4px 0 !important;
 }
 .table-hint p { margin: 0 !important; }
+
+
+/* --------------------------------------------- the settings above the score */
+.settings-row   { margin: 0 0 6px 0 !important; }
+.settings-row p { margin: 0 !important; }
+.settings-line  { font-size: 0.78rem; color: var(--muted); }
+.settings-line code {
+    font-size: 0.76rem;
+    color: var(--accent);
+    background: var(--card-bg, rgba(124, 58, 237, 0.06));
+    padding: 1px 5px;
+    border-radius: 4px;
+}

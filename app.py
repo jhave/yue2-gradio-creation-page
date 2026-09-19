@@ -1611,8 +1611,18 @@ def load_display_name(track_name):
 
 
 def public_title(meta, folder_name):
-    """What a listener should see: display name, else track title, else the folder."""
-    return (meta.get("display_name") or meta.get("track_title") or folder_name).strip()
+    """
+    What a listener should see: display name, else track title, else the folder
+    with its timestamp and settings tag taken off. Older renders stored the whole
+    folder name as the track title, so that is cleaned too.
+    """
+    shown = (meta.get("display_name") or "").strip()
+    if not shown:
+        stored = (meta.get("track_title") or "").strip()
+        shown = "" if _STAMP_RE.match(stored) else stored
+    if not shown:
+        shown, _ = split_track_name(folder_name)
+    return shown or folder_name
 
 
 def public_slug(title, taken):
@@ -2346,6 +2356,18 @@ def preset_score_markdown():
     return "\n".join(lines)
 
 
+def _dedupe_labels(parts):
+    """One line per label: the legacy key map can name the same slider twice."""
+    seen, out = set(), []
+    for part in parts:
+        key = part.split(":", 1)[0].strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(part)
+    return out
+
+
 def format_params_summary(params):
     """One-line human-readable parameter summary from a track.json parameters block."""
     if not params:
@@ -2361,7 +2383,7 @@ def format_params_summary(params):
     }
     bits = [f"{PARAM_LABELS[k]}: {params[k]}" for k in PARAM_KEYS if k in params]
     bits += [f"{label}: {params[key]}" for key, label in legacy.items() if key in params]
-    return " · ".join(bits)
+    return " · ".join(_dedupe_labels(bits))
 
 
 def update_folder_preview(custom_title, lyrics_text, preset_name="", params=None, append_tag=True):
@@ -2733,15 +2755,94 @@ def sort_tracks(tracks, by="stars"):
 
 
 def get_track_table(min_rating_label="all", playing=None, sort_by="stars"):
-    """One line per track: playing marker and stars, title, length, settings, date."""
+    """
+    One line per track.
+
+    The marker has a column of its own so the stars get a fixed width that fits
+    five of them; sharing one column truncated four and five to an ellipsis.
+    The settings tag moved out of the table and sits above the score instead.
+    """
     tracks = sort_tracks(filter_by_rating(get_track_data(), min_rating_label), sort_by)
     rows = []
     for t in tracks:
-        shown, tag = track_line(t)
+        shown, _ = track_line(t)
         mark = "▶" if playing and t["name"] == playing else ""
         stars = rating_stars(t.get("rating")) or "·"
-        rows.append([f"{mark}{stars}".strip(), shown, t["duration"], tag or "—", t["date"]])
+        rows.append([mark, stars, shown, t["duration"], t["date"]])
     return rows
+
+
+def track_params(track_name):
+    """The 16 values this render used, defaults for any it never stored."""
+    meta = read_track_metadata(Path("outputs") / (track_name or ""))
+    stored = meta.get("parameters", {}) or {}
+    return [param_value(stored, k) for k in PARAM_KEYS]
+
+
+def send_settings_to_create(track_name):
+    """
+    The track's 16 parameters into the Create tab, and go there.
+
+    Nothing else moves: the prompt, lyrics and score stay as they are, so this
+    is 'render what I am working on with that track's sound'.
+    """
+    if not track_name:
+        return tuple([gr.update() for _ in PARAM_KEYS]
+                     + ["Select a track first.", gr.update()])
+    shown, _ = split_track_name(track_name)
+    return tuple(track_params(track_name)
+                 + [f"Settings from **{shown}** are in the Create tab.",
+                    gr.update(selected="create")])
+
+
+def send_track_to_create(track_name):
+    """The whole render — parameters, prompt, lyrics, score, title — and go there."""
+    if not track_name:
+        return tuple([gr.update() for _ in PARAM_KEYS]
+                     + [gr.update(), gr.update(), gr.update(), gr.update(),
+                        "Select a track first.", gr.update()])
+    base = Path("outputs") / track_name
+    meta = read_track_metadata(base)
+    style = meta.get("style", "")
+    lyrics = meta.get("lyrics", "")
+    req = base / "request.json"
+    if (not style or not lyrics) and req.exists():
+        try:
+            data = json.loads(req.read_text(encoding="utf-8"))
+            style = style or data.get("style", "")
+            lyrics = lyrics or data.get("lyrics", "")
+        except Exception:
+            pass
+    score_file = base / "score.abc"
+    abc = score_file.read_text(encoding="utf-8", errors="ignore") if score_file.exists() else ""
+    shown, _ = split_track_name(track_name)
+    stored = (meta.get("track_title") or "").strip()
+    if _STAMP_RE.match(stored):          # older renders stored the folder name
+        stored = ""
+    title = stored or shown or track_name
+    return tuple(track_params(track_name)
+                 + [gr.update(value=style), gr.update(value=lyrics),
+                    gr.update(value=sanitize_song_id(title)), gr.update(value=abc),
+                    f"**{shown}** is loaded into the Create tab — prompt, lyrics, "
+                    f"score and all 16 parameters.",
+                    gr.update(selected="create")])
+
+
+def track_settings_line(track_name):
+    """The settings this render used, for the line above its score."""
+    if not track_name:
+        return ""
+    _, tag = split_track_name(track_name)
+    meta = read_track_metadata(Path("outputs") / track_name)
+    summary = format_params_summary(meta.get("parameters", {}))
+    bits = []
+    if tag:
+        bits.append(f"<code>{html.escape(tag)}</code>")
+    if summary:
+        bits.append(html.escape(summary))
+    if not bits:
+        return "<span class='settings-line'>No parameters stored with this track.</span>"
+    return "<span class='settings-line'>" + " &nbsp;·&nbsp; ".join(bits) + "</span>"
 
 
 def table_names(min_rating_label="all", sort_by="stars"):
@@ -2968,13 +3069,13 @@ with gr.Blocks(title="YuE2 Studio") as demo:
     init_p = _sounds.get(default_sound_name, {})
     init_song = _songs.get(default_song_name, {})
 
-    with gr.Tabs():
+    with gr.Tabs() as main_tabs:
 
         # ============================== CREATE ==============================
         # The score used to live on its own tab, so "Plan Score Only" wrote its
         # output somewhere you were not looking. It is a panel on this tab now,
         # and planning opens it.
-        with gr.TabItem("Create"):
+        with gr.TabItem("Create", id="create"):
             last_sound_state = gr.State(default_sound_name)
             last_song_state = gr.State(default_song_name)
 
@@ -3247,18 +3348,17 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                             elem_classes=["compact-dropdown"], elem_id="tip-favs-only"
                         )
 
+                    # Holds the selection for every listener below. Hidden:
+                    # clicking a row is the way to choose, and a dropdown saying
+                    # the same thing twice only competes with it.
                     track_selector = gr.Dropdown(
-                        label="Track — pick here, or click a row below",
-                        choices=[], interactive=True
+                        label="", choices=[], interactive=True, visible=False
                     )
 
-                    gr.Markdown("Click a row to play it. Stars are set on the "
-                                "player's rating row, not here.",
-                                elem_classes=["table-hint"])
                     track_table = gr.Dataframe(
-                        headers=["★", "Track", "Length", "Settings", "Made"],
+                        headers=["", "★", "Track", "Length", "Made"],
                         datatype=["str", "str", "str", "str", "str"],
-                        column_widths=["8%", "38%", "12%", "23%", "19%"],
+                        column_widths=["4%", "14%", "47%", "13%", "22%"],
                         interactive=False, wrap=False, elem_classes=["track-table"]
                     )
 
@@ -3323,6 +3423,18 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                                                 elem_id="tip-upgrade")
 
                     with gr.Accordion("Score and section timings", open=True):
+                        with gr.Row(elem_classes=["field-header-row"]):
+                            use_settings_btn = gr.Button(
+                                "Settings → Create", size="sm", scale=0, min_width=150,
+                                elem_classes=["nowrap-btn", "btn-secondary"],
+                                elem_id="tip-use-settings"
+                            )
+                            use_track_btn = gr.Button(
+                                "Whole track → Create", size="sm", scale=0, min_width=180,
+                                elem_classes=["nowrap-btn", "btn-secondary"],
+                                elem_id="tip-use-track"
+                            )
+                        lib_settings = gr.Markdown("", elem_classes=["settings-row"])
                         lib_metrics = gr.Markdown("")
                         library_score = gr.Code(label="ABC score", language="markdown", lines=8)
 
@@ -3485,6 +3597,9 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                 now_playing_markdown,
                 inputs=[track_selector, favs_only_check],
                 outputs=[now_playing]
+            )
+            track_selector.change(
+                track_settings_line, inputs=[track_selector], outputs=[lib_settings]
             )
             track_selector.change(
                 get_track_table,
@@ -3827,6 +3942,22 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                outputs=[sound_dropdown])
         source(refresh_song_list, inputs=[show_all_presets, song_dropdown],
                outputs=[song_dropdown])
+
+    # Library -> Create. Wired here because it reaches across both tabs.
+    use_settings_btn.click(
+        send_settings_to_create,
+        inputs=[track_selector],
+        outputs=PARAM_COMPONENTS + [rename_status, main_tabs]
+    )
+    use_track_btn.click(
+        send_track_to_create,
+        inputs=[track_selector],
+        outputs=PARAM_COMPONENTS + [style_input, lyrics_input, custom_title,
+                                    abc_editor, rename_status, main_tabs]
+    ).then(
+        None, inputs=[abc_editor],
+        js="(abc) => { setTimeout(() => window.renderSheetMusic(abc), 300); }"
+    )
 
     demo.load(refresh_ui, outputs=[track_selector, track_table])
 
