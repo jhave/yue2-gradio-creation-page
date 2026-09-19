@@ -3330,23 +3330,17 @@ with gr.Blocks(title="YuE2 Studio") as demo:
         with gr.TabItem("Library") as library_tab:
             with gr.Row():
                 with gr.Column(scale=6):
-                    with gr.Row():
-                        refresh_lib_btn = gr.Button("Refresh", size="sm",
-                                                    elem_classes=["btn-secondary"])
-                        reveal_btn = gr.Button("Reveal in Finder", size="sm",
-                                               elem_classes=["btn-secondary"])
-                        play_system_btn = gr.Button("Play in macOS player", size="sm",
-                                                    elem_classes=["btn-secondary"])
-                        sort_by_dd = gr.Dropdown(
-                            choices=["stars", "newest"], value="stars",
-                            label="", show_label=False, container=False,
-                            scale=0, min_width=110, elem_id="tip-sort"
-                        )
-                        favs_only_check = gr.Dropdown(
-                            choices=FILTER_CHOICES, value="all", label="", show_label=False,
-                            interactive=True, scale=0, min_width=150,
-                            elem_classes=["compact-dropdown"], elem_id="tip-favs-only"
-                        )
+                    # Sort order and rating filter, kept as state at their
+                    # defaults. Every handler below reads them; nothing needs to
+                    # see them, and the list already leads with the best rated.
+                    sort_by_dd = gr.Dropdown(
+                        choices=["stars", "newest"], value="stars",
+                        label="", show_label=False, container=False, visible=False
+                    )
+                    favs_only_check = gr.Dropdown(
+                        choices=FILTER_CHOICES, value="all", label="",
+                        show_label=False, interactive=True, visible=False
+                    )
 
                     # Holds the selection for every listener below. Hidden:
                     # clicking a row is the way to choose, and a dropdown saying
@@ -3367,10 +3361,14 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                                                     elem_classes=["favs-playlist"])
 
                     with gr.Group():
-                        gr.Markdown("**Rename or delete**", elem_classes=["field-header-label"])
+                        gr.Markdown("**Rename, reveal or delete**",
+                                    elem_classes=["field-header-label"])
                         with gr.Row():
+                            reveal_btn = gr.Button("Reveal in Finder", size="sm",
+                                                   scale=0, min_width=150,
+                                                   elem_classes=["nowrap-btn", "btn-secondary"])
                             new_name_input = gr.Textbox(
-                                label="New name", show_label=False,
+                                label="New name", show_label=False, max_lines=1,
                                 placeholder="new folder name, e.g. cyber_hopkins_master"
                             )
                             rename_btn = gr.Button("Rename", elem_classes=["btn-secondary"])
@@ -3398,32 +3396,9 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                             label="", show_label=False, container=False,
                             elem_classes=["rating-radio"], elem_id="tip-rating-lib"
                         )
-                    with gr.Row(elem_classes=["field-header-row"]):
-                        build_page_btn = gr.Button("Build playlist page", size="sm", scale=0,
-                                                   min_width=180,
-                                                   elem_classes=["nowrap-btn", "btn-primary"],
-                                                   elem_id="tip-build-page")
-                        export_favs_btn = gr.Button("Export JSON", size="sm", scale=0,
-                                                    min_width=130,
-                                                    elem_classes=["nowrap-btn", "btn-secondary"],
-                                                    elem_id="tip-export-favs")
-                        redecode_btn = gr.Button("Rebuild lossless", size="sm", scale=0,
-                                                 min_width=160,
-                                                 elem_classes=["nowrap-btn", "btn-secondary"],
-                                                 elem_id="tip-redecode")
-                    with gr.Row(elem_classes=["field-header-row"]):
-                        upgrade_steps = gr.Dropdown(
-                            choices=[16, 24, 32], value=32, label="", show_label=False,
-                            interactive=True, scale=0, min_width=90,
-                            elem_classes=["compact-dropdown"], elem_id="tip-upgrade-steps"
-                        )
-                        upgrade_btn = gr.Button("Re-solve at higher steps", size="sm", scale=0,
-                                                min_width=220,
-                                                elem_classes=["nowrap-btn", "btn-secondary"],
-                                                elem_id="tip-upgrade")
-
                     with gr.Accordion("Score and section timings", open=True):
                         with gr.Row(elem_classes=["field-header-row"]):
+                            gr.Markdown("Export:", elem_classes=["toggle-row-label"])
                             use_settings_btn = gr.Button(
                                 "Settings → Create", size="sm", scale=0, min_width=150,
                                 elem_classes=["nowrap-btn", "btn-secondary"],
@@ -3461,6 +3436,23 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                         save_notes_btn = gr.Button("Save notes", size="sm",
                                                    elem_classes=["btn-secondary"])
 
+                    # Minutes of GPU each, wanted once a track is worth it.
+                    with gr.Accordion("Re-render this track", open=False):
+                        with gr.Row(elem_classes=["field-header-row"]):
+                            redecode_btn = gr.Button("Rebuild lossless", size="sm", scale=0,
+                                                     min_width=160,
+                                                     elem_classes=["nowrap-btn", "btn-secondary"],
+                                                     elem_id="tip-redecode")
+                            upgrade_steps = gr.Dropdown(
+                                choices=[16, 24, 32], value=32, label="", show_label=False,
+                                interactive=True, scale=0, min_width=90,
+                                elem_classes=["compact-dropdown"], elem_id="tip-upgrade-steps"
+                            )
+                            upgrade_btn = gr.Button("Re-solve at higher steps", size="sm",
+                                                    scale=0, min_width=220,
+                                                    elem_classes=["nowrap-btn", "btn-secondary"],
+                                                    elem_id="tip-upgrade")
+
             def refresh_ui(min_rating_label="all", current=None, sort_by="stars"):
                 """
                 Rebuild the list without choosing anything.
@@ -3487,31 +3479,6 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                         return names[row]
                 return gr.update()
 
-            def export_favorites():
-                """Write favorites.json in outputs/ — the input for the favorites webpage."""
-                favs = [t for t in get_track_data()
-                        if t.get("rating") is not None and t["rating"] >= FAVORITE_THRESHOLD]
-                payload = []
-                for t in favs:
-                    meta = read_track_metadata(Path(t["path"]))
-                    payload.append({
-                        "folder": t["name"],
-                        "title": meta.get("track_title", t["name"]),
-                        "preset": meta.get("preset", ""),
-                        "created": meta.get("created", ""),
-                        "duration": t["duration"],
-                        "key_bpm": t["key_bpm"],
-                        "audio": t["audio"],
-                        "style": t["style"],
-                        "lyrics": t["lyrics"],
-                        "parameters": meta.get("parameters", {}),
-                        "rating": t.get("rating"),
-                        "notes": meta.get("notes", ""),
-                    })
-                out = Path("outputs") / "favorites.json"
-                out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-                return f"Wrote `{out}` — {len(payload)} favourite(s)."
-
             track_table.select(on_table_select, inputs=[favs_only_check, sort_by_dd],
                                outputs=[track_selector])
 
@@ -3521,7 +3488,7 @@ with gr.Blocks(title="YuE2 Studio") as demo:
             library_tab.select(refresh_table_only,
                                inputs=[favs_only_check, track_selector, sort_by_dd],
                                outputs=[track_table])
-            for source in (refresh_lib_btn.click, favs_only_check.change, sort_by_dd.change):
+            for source in (favs_only_check.change, sort_by_dd.change):
                 source(refresh_ui, inputs=[favs_only_check, track_selector, sort_by_dd],
                        outputs=[track_selector, track_table])
 
@@ -3535,8 +3502,6 @@ with gr.Blocks(title="YuE2 Studio") as demo:
             ).then(
                 favorites_playlist_markdown, outputs=[favs_playlist]
             )
-
-            export_favs_btn.click(export_favorites, outputs=[rename_status])
 
             redecode_btn.click(
                 redecode_lossless,
@@ -3564,11 +3529,6 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                 advance_if_autoplay,
                 inputs=[track_selector, favs_only_check, autoplay_check],
                 outputs=[track_selector]
-            )
-
-            build_page_btn.click(
-                lambda: build_favorites_page()[0],
-                outputs=[rename_status]
             )
 
             save_notes_btn.click(
@@ -3613,7 +3573,6 @@ with gr.Blocks(title="YuE2 Studio") as demo:
                 load_display_name, inputs=[track_selector], outputs=[lib_display_name]
             )
             library_tab.select(favorites_playlist_markdown, outputs=[favs_playlist])
-            refresh_lib_btn.click(favorites_playlist_markdown, outputs=[favs_playlist])
 
             track_selector.change(
                 select_track_by_name,
@@ -3637,12 +3596,6 @@ with gr.Blocks(title="YuE2 Studio") as demo:
 
             reveal_btn.click(
                 reveal_in_finder_action,
-                inputs=[track_selector],
-                outputs=[rename_status]
-            )
-
-            play_system_btn.click(
-                play_in_system_action,
                 inputs=[track_selector],
                 outputs=[rename_status]
             )

@@ -56,8 +56,7 @@ TOOLTIPS = {
     "tip-cot": "full: chord-annotated score, then audio. melody: melody-only score, no chord "
                "symbols — looser harmonic commitment. off: no score at all, straight to audio "
                "(the score panel below stays empty).",
-    "tip-favs-only": "Minimum rating for the list, the table and the ⏮/⏭ playlist. "
-                     "\"unrated\" shows only what you have not judged yet — the queue to work through.",
+
     "tip-rating": "0-5. Absent is not zero: leaving a track unrated means unjudged, and the "
                   "analysis excludes it. A 0 means you listened and rejected it, which is real "
                   "evidence. 4 or more counts as a favorite for the playlist and the page.",
@@ -71,10 +70,7 @@ TOOLTIPS = {
     "tip-append-tag": "Appends a short code for every setting that differs from the preset "
                       "baseline, e.g. [vw1.35_stk80]. Renders of one song at different values "
                       "stay distinguishable in Finder without the old 120-character names.",
-    "tip-build-page": "Writes outputs/favorites_page/index.html with a player per starred "
-                      "track, a fold-out parameter table and your notes. Audio is converted to "
-                      "MP3 beside it, so the folder can be moved or uploaded whole. Rebuilding "
-                      "preserves any intro text you edited into the page.",
+
     "tip-audio-format": "The pipeline writes 24-bit FLAC at about 11 MB per minute. "
                         "latent.npy is 0.4 MB per minute and the VAE decode is deterministic, "
                         "so MP3 + latents is a complete archive: the lossless master regenerates "
@@ -99,8 +95,7 @@ TOOLTIPS = {
                         "audio/iridescent-scaling.mp3. The render folder keeps its own name.",
     "tip-notes": "Accompanying text for this track. Saved into its track.json and rendered "
                  "under the track on the playlist page.",
-    "tip-export-favs": "Write outputs/favorites.json — every starred track with its audio path, "
-                       "prompt, lyrics and parameters. This is the input for the favorites page.",
+
     "tip-stop": "Sets the flag the pipeline polls between tokens. Generation stops at the next "
                 "token and the half-written folder is removed.",
     "tip-save": "Green means the current settings are already stored under this preset name. "
@@ -184,11 +179,6 @@ TOOLTIPS["tip-download-staves"] = (
 )
 
 
-TOOLTIPS["tip-sort"] = (
-    "stars: best first, and tracks you have not rated yet below them — unrated "
-    "means not yet judged, not judged badly. newest: most recent first, which is "
-    "where a render you just made will be."
-)
 
 
 TOOLTIPS["tip-use-settings"] = (

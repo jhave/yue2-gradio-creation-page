@@ -625,6 +625,35 @@ button.yue-tip-target { text-decoration: none !important; }
 
 .track-table [role="row"] { cursor: pointer !important; }
 
+/* Gradio marks the clicked CELL — .cell-selected .cell-solo — with its own
+   ring and tint, which reads as a field waiting for input. The selection
+   belongs to the row, so the cell's marks are cleared and the whole row is
+   tinted instead. */
+.track-table .body-cell.cell-selected,
+.track-table .body-cell.cell-solo {
+    background: transparent !important;
+    box-shadow: none !important;
+    border-color: transparent !important;
+}
+.track-table .body-cell.cell-selected::after,
+.track-table .body-cell.cell-solo::after,
+.track-table .body-cell.cell-selected::before,
+.track-table .body-cell.cell-solo::before { display: none !important; }
+
+.track-table [role="row"]:has(.cell-selected) [role="gridcell"] {
+    background: var(--card-hover, rgba(124, 58, 237, 0.1)) !important;
+}
+
+/* The inner span carries a white background of its own. Against a tinted row
+   that white rectangle is the box that made the cell look like an input — the
+   borders and outlines were already none. */
+.track-table .cell-wrap,
+.track-table .cell-wrap span,
+.track-table [role="gridcell"] span {
+    background: transparent !important;
+    border: none !important;
+}
+
 /* A read-only cell that draws a focus ring still looks like a field waiting
    for input. The row's own highlight is the only selection feedback wanted. */
 .track-table [role="gridcell"],
