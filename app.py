@@ -1095,6 +1095,70 @@ def _is_cancelled():
     return _CANCEL["stop"]
 
 
+# ==================== TERMINAL LOG ====================
+# The browser shows a progress bar; the terminal showed the pipeline's own
+# noise and nothing about which render it belonged to. A long session leaves
+# these lines as the record of what ran, when, on what, and for how long.
+
+_LOG = {"track": "", "t0": None, "open": False}
+
+
+def style_title_hint(style, lyrics):
+    """A name for the log when no track title was typed: the lyric keywords,
+    else the opening words of the style prompt."""
+    from_lyrics = (extract_lyric_keywords(lyrics) or "").strip()
+    if from_lyrics and from_lyrics.lower() != "track":
+        return from_lyrics
+    words = (style or "").strip().split()
+    hint = " ".join(words[:6]).rstrip(",;:. ") if words else ""
+    return (hint[:42] + "…") if len(hint) > 43 else (hint or "untitled")
+
+
+def _hms(seconds):
+    seconds = int(round(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m{seconds % 60:02d}s"
+    return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m{seconds % 60:02d}s"
+
+
+def log_track(title, seed=None, mode=None, extra=""):
+    """
+    Open a render's block in the terminal: what is being made, and when.
+
+    A one-click render calls this, then calls the two stages that would each
+    call it again, so an already-open block stays open and keeps one header.
+    """
+    if _LOG["open"]:
+        return
+    _LOG["open"] = True
+    _LOG["track"] = (title or "untitled").strip()
+    _LOG["t0"] = time.perf_counter()
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    bits = [b for b in (f"seed {seed}" if seed is not None else "",
+                        f"score {mode}" if mode else "", extra) if b]
+    tail = f"  ({' · '.join(bits)})" if bits else ""
+    print(f"\n┌─ {stamp}  {_LOG['track']}{tail}", flush=True)
+
+
+def log_stage(message, done=False, started=None):
+    """One line per stage boundary, with the clock and the elapsed time."""
+    now = datetime.datetime.now().strftime("%H:%M:%S")
+    took = f"  {_hms(time.perf_counter() - started)}" if started is not None else ""
+    mark = "✓" if done else "▶"
+    print(f"│  {now}  {mark} {message}{took}", flush=True)
+
+
+def log_done(message):
+    """Close the block, with the wall time of the whole render."""
+    now = datetime.datetime.now().strftime("%H:%M:%S")
+    total = f"  total {_hms(time.perf_counter() - _LOG['t0'])}" if _LOG["t0"] else ""
+    print(f"└─ {now}  {message}{total}\n", flush=True)
+    _LOG["open"] = False
+    _LOG["t0"] = None
+
+
 def make_progress_hooks(progress, start_frac, token_frac, expected_tokens, label,
                         audio_stage=False):
     """
@@ -1106,12 +1170,21 @@ def make_progress_hooks(progress, start_frac, token_frac, expected_tokens, label
                synthesis stage, which emits no tokens.
     """
     _now = time.perf_counter()
-    state = {"n": 0, "t0": _now, "last": _now, "last_token": _now, "polls": 0}
+    state = {"n": 0, "t0": _now, "last": _now, "last_token": _now, "polls": 0,
+             "printed": _now}
 
     def on_token(phase, token):
         state["n"] += 1
         now = time.perf_counter()
         state["last_token"] = now
+        # Every 30s the terminal gets one line, so a render left running
+        # overnight reads back as a rate, not a wall of nothing.
+        if now - state["printed"] >= 30.0:
+            state["printed"] = now
+            n, el = state["n"], now - state["t0"]
+            print(f"│  {datetime.datetime.now():%H:%M:%S}  · {_LOG['track']} — "
+                  f"{n} tokens, {n / el if el else 0:.1f} tok/s, {_hms(el)} in",
+                  flush=True)
         if now - state["last"] < 0.4:
             return
         state["last"] = now
@@ -1152,7 +1225,9 @@ def generate_plan_step(style, lyrics, seed, score_temp, score_top_p, score_rep_p
     seed = int(seed) if seed is not None else 404
     cot_mode = (cot_mode or "full").strip() or "full"
 
+    log_track(style_title_hint(style, lyrics), seed=seed, mode=cot_mode)
     if cot_mode == "off":
+        log_done("score mode off — nothing planned")
         return "", "*Score mode is off — no ABC is generated; the model goes straight to audio.*", \
                "ℹ️ Score mode **off**: nothing to plan. Use Synthesize Audio."
 
@@ -1171,10 +1246,12 @@ def generate_plan_step(style, lyrics, seed, score_temp, score_top_p, score_rep_p
     }
 
     start = time.perf_counter()
+    log_stage(f"planning score · exploration {score_temp} · top-p {score_top_p}")
     on_token, cancelled = make_progress_hooks(progress, 0.05, 0.95, 1400, "🎼 Planning score")
     try:
         plan = pipe.plan(**request, cancelled=cancelled, on_token=on_token)
     except InterruptedError:
+        log_stage("planning cancelled", done=True, started=start)
         return "", "", "🛑 Planning cancelled."
     elapsed = time.perf_counter() - start
 
@@ -1182,6 +1259,8 @@ def generate_plan_step(style, lyrics, seed, score_temp, score_top_p, score_rep_p
     metrics = parse_abc_metrics(abc)
     mode_note = " · melody only" if cot_mode == "melody" else ""
     status_msg = f"✅ Plan generated in {elapsed:.1f}s ({len(plan.abc_ids)} tokens{mode_note})"
+    log_stage(f"score written · {len(plan.abc_ids)} tokens{mode_note}",
+              done=True, started=start)
 
     return abc, metrics, status_msg
 
@@ -2421,6 +2500,9 @@ def synthesize_audio_step(style, lyrics, abc_text, seed, ode_steps,
                           song_name="",
                           progress=gr.Progress()):
     _CANCEL["stop"] = False
+    log_track(track_title or style_title_hint(style, lyrics),
+              seed=seed, mode=cot_mode,
+              extra="from the supplied score" if (abc_text or "").strip() else "")
     progress(0.02, desc="Preparing pipeline...")
     pipe = get_pipeline()
 
@@ -2488,6 +2570,9 @@ def synthesize_audio_step(style, lyrics, abc_text, seed, ode_steps,
 
     progress(0.15, desc=f"🎶 Generating song ({ode_steps} flow steps)...")
     start = time.perf_counter()
+    log_stage(f"generating audio · {ode_steps} flow steps · wildness {sem_temp} · "
+              f"cfg {cfg_scale}{' · score supplied' if request.get('abc') else ''}")
+    log_stage(f"writing to outputs/{folder_name}")
 
     on_token, cancelled = make_progress_hooks(
         progress, 0.15, 0.80, 4000, "🎶 Generating song", audio_stage=True
@@ -2501,10 +2586,12 @@ def synthesize_audio_step(style, lyrics, abc_text, seed, ode_steps,
             output_dir.rmdir()
         except OSError:
             pass
+        log_done("cancelled")
         return None, "🛑 Generation cancelled.", ""
     except Exception as exc:
         import traceback
         traceback.print_exc()
+        log_done(f"failed — {exc}")
         return None, f"⚠️ Synthesis failed: {exc}", ""
 
     # A second name for the same audio. save_artifacts() writes audio.flac and
@@ -2533,6 +2620,8 @@ def synthesize_audio_step(style, lyrics, abc_text, seed, ode_steps,
 
     status_msg = (f"🎉 Rendered in {elapsed:.1f}s | Length: {audio_seconds:.1f}s | "
                   f"`{Path(audio_path).name}` | {fmt_note}")
+    log_stage(f"audio {_hms(audio_seconds)} · {fmt_note}", done=True, started=start)
+    log_done(f"{folder_name}")
     return audio_path, status_msg, folder_name
 
 
@@ -2580,6 +2669,7 @@ def one_click_generate_step(style, lyrics, custom_title,
                             song_name="",
                             progress=gr.Progress()):
     """Plan ABC score and synthesize audio in a single flow."""
+    log_track(custom_title or style_title_hint(style, lyrics), seed=seed, mode=cot_mode)
     abc_text, metrics, plan_msg = generate_plan_step(
         style, lyrics, seed, score_temp, score_top_p, score_rep_pen,
         score_top_k=score_top_k, score_pen_win=score_pen_win, cot_mode=cot_mode,
