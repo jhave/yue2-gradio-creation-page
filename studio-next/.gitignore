@@ -1,0 +1,10 @@
+# Music, personal composition data, and machine-specific renderer configuration.
+/data/
+/media/
+/outputs/
+/preview-*.jpg
+/example-render-request.json
+__pycache__/
+*.pyc
+.venv/
+.DS_Store

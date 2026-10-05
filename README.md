@@ -7,6 +7,22 @@ keepers.
 
 Runs on Apple Silicon (MPS). Nothing here calls a hosted service.
 
+## Studio Next
+
+[Studio Next](studio-next/README.md) adds a separate library and composition UI
+on port 7861, with persistent playback, playlists, drafts, and direct transfers
+of a selected track's prompts, lyrics, score, or generation settings into Create.
+It reuses the running Gradio renderer on port 7860. The original `app.py` remains
+available; Studio Next lives in its own folder and does not replace it.
+
+```bash
+cd studio-next && python3 server.py --port 7861
+```
+
+See its README to connect an existing library and renderer. Personal music and
+workspace data are excluded from Git. Full model rendering through Studio Next
+still needs an end-to-end test before switching the demo workflow.
+
 ## The files
 
 | | |

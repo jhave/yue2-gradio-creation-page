@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>YuE2 · Studio Next</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="YuE2 Studio Next home"><span class="brand-icon">y.</span><span>YuE2 <small>STUDIO NEXT</small></span></a>
+    <button class="create-shortcut" id="new-draft">＋ New composition</button>
+    <div class="section-label">WORKSPACE</div>
+    <nav aria-label="Workspace"><button class="nav-button active" data-view="library">▤ <span>Library</span></button><button class="nav-button" data-view="create">♫ <span>Create</span></button><button class="nav-button" data-view="drafts">▧ <span>Saved drafts</span><span id="draft-count" class="count">0</span></button></nav>
+    <div class="section-label collection-heading">COLLECTIONS <button id="new-playlist" class="icon-button" aria-label="New playlist">＋</button></div>
+    <nav id="collections" aria-label="Collections"></nav>
+    <div class="sidebar-foot"><span class="status-dot"></span> Local workspace<br><small>Alternative studio · v0.2</small><a href="http://127.0.0.1:7860" target="_blank" rel="noopener">Open existing studio ↗</a></div>
+  </aside>
+  <main>
+    <header class="topbar"><div class="view-tabs" role="tablist" aria-label="Studio view"><button class="selected" data-view="library" role="tab" aria-selected="true">Library</button><button data-view="create" role="tab" aria-selected="false">Create</button></div><span class="prototype-badge">DESIGN SANDBOX</span><button id="refresh" class="quiet-button">↻ Refresh library</button></header>
+    <section id="library-view" class="view">
+      <div class="page-heading"><div><div class="eyebrow">YOUR LISTENING ROOM</div><h1 id="collection-title">Demo selection</h1><p id="collection-description">The pieces worth coming back to.</p></div><div class="collection-art" aria-hidden="true"><span>15</span><small>SELECTED<br>RENDERS</small></div></div>
+      <div class="library-toolbar"><label class="search-box"><span>⌕</span><input id="search" type="search" placeholder="Search titles, prompts, lyrics…" aria-label="Search tracks"></label><select id="sort" aria-label="Sort tracks"><option value="best">Best rated</option><option value="newest">Newest first</option><option value="title">Title A–Z</option></select><button id="play-collection" class="quiet-button">▶ Play collection</button></div>
+      <div class="table-meta"><span id="track-count"></span><span id="scan-status" role="status">Scanning library…</span></div>
+      <div id="track-list" class="track-list" role="list" aria-label="Tracks"></div>
+      <div id="library-empty" class="empty-state" hidden>No tracks match. Try another collection or search.</div>
+      <p class="library-footnote" id="library-footnote">Select a title to explore. Press play to listen.</p>
+    </section>
+    <section id="create-view" class="view" hidden>
+      <div class="page-heading"><div><div class="eyebrow">FROM AN IDEA TO A PIECE</div><h1>Create a composition</h1><p>A little structure. Room for the unexpected.</p></div></div>
+      <div id="transfer-status" class="transfer-status" role="status" hidden><span id="transfer-message"></span><button type="button" id="undo-transfer" class="text-button">Undo</button></div>
+      <form id="composition-form">
+        <label class="field-label">Title<input id="draft-title" name="title" placeholder="Give this piece a name"></label>
+        <label class="field-label">Style & production prompt<textarea id="draft-style" name="style" rows="4" placeholder="Describe the sound, instruments, texture, and movement…"></textarea></label>
+        <label class="field-label">Lyrics <span class="muted">optional · use [Verse], [Chorus], [Bridge]</span><textarea id="draft-lyrics" name="lyrics" rows="7" placeholder="A first line, a whole story, or leave space for an instrumental."></textarea></label>
+        <div class="basics"><label class="field-label">Flow steps<select id="flow_steps" name="flow_steps"><option value="8">8 · draft</option><option value="12">12 · quick</option><option value="16">16 · balanced</option><option value="20">20</option><option value="24">24 · refined</option><option value="28">28</option><option value="32">32 · master</option></select></label><label class="field-label">Seed<input id="seed" name="seed" type="number" value="888" min="0" step="1"></label><label class="field-label">Score mode<select id="cot_mode" name="cot_mode"><option value="full">Full planning</option><option value="melody">Melody planning</option><option value="off">No planning</option></select></label></div>
+        <details class="disclosure"><summary>Advanced sound controls <span>Score · vocal delivery · decoding</span></summary><div id="advanced-controls"></div></details>
+        <details class="disclosure"><summary>ABC score <span>Inspect or edit the musical structure</span></summary><label class="field-label">ABC notation<textarea id="draft-score" name="abc" rows="12" class="mono" placeholder="X:1&#10;T:Your composition&#10;M:4/4&#10;L:1/8&#10;Q:1/4=100&#10;K:C"></textarea></label></details>
+        <div class="form-actions"><button type="button" id="create-track" class="primary-button">Create</button><button type="submit" class="quiet-button">Save draft</button><details class="more-actions"><summary>More</summary><button type="button" id="export-request" class="quiet-button">Export render request ↓</button></details></div><p class="form-note">Uses the score below when supplied; otherwise writes a new score. Renders through your existing studio and keeps a copy here.</p><div id="draft-status" role="status"></div><div id="render-status" class="render-status" role="status" hidden><span id="render-message"></span><progress id="render-progress" max="1"></progress><button id="play-render" class="quiet-button" type="button" hidden>Play new track</button></div>
+      </form>
+    </section>
+    <section id="drafts-view" class="view" hidden><div class="page-heading"><div><div class="eyebrow">IDEAS IN PROGRESS</div><h1>Saved drafts</h1><p>Prompts, lyrics, scores, and settings together.</p></div></div><div id="draft-list"></div></section>
+  </main>
+  <aside class="inspector" aria-label="Track details"><div class="inspector-heading"><span>TRACK DETAILS</span><button id="show-playing" class="quiet-button">Now playing ↗</button></div><div id="track-detail"></div></aside>
+</div>
+<footer class="player" aria-label="Persistent audio player">
+  <button class="player-art" id="player-reveal" aria-label="Show playing track">♫</button><div class="player-info"><strong id="playing-title">Choose something to listen to</strong><span id="playing-subtitle">Your player stays with you across views</span></div>
+  <div class="transport"><button id="previous" class="icon-button" aria-label="Previous track">⏮</button><button id="toggle-play" class="play-button" aria-label="Play">▶</button><button id="next" class="icon-button" aria-label="Next track">⏭</button></div>
+  <div class="progress-area"><span id="elapsed">0:00</span><input id="seek" aria-label="Playback position" type="range" min="0" max="100" step="0.1" value="0"><span id="duration">0:00</span></div>
+  <label class="volume-control">♪<input id="volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value="0.8"></label><button id="playback-settings" class="icon-button" aria-label="Playback preferences">⚙</button>
+  <audio id="audio" preload="metadata"></audio>
+</footer>
+<div id="playback-popover" class="playback-popover" hidden><strong>Playback preferences</strong><label><input type="checkbox" id="continuous" checked> Continue through the queue</label><label><input type="checkbox" id="pause-hidden"> Pause when leaving this browser tab</label><p>Switching Library and Create keeps your place.</p></div>
+<dialog id="playlist-dialog"><form id="playlist-form"><h2>New playlist</h2><label class="field-label">Playlist name<input id="playlist-name" required maxlength="80" placeholder="Evening experiments"></label><div class="form-actions"><button class="primary-button" type="submit">Create playlist</button><button id="cancel-playlist" class="quiet-button" type="button">Cancel</button></div></form></dialog>
+<dialog id="copy-dialog"><h2>Copy text</h2><p class="form-note">Select this text and copy it to your clipboard.</p><textarea id="copy-text" rows="10" readonly aria-label="Text to copy"></textarea><button id="close-copy" class="quiet-button">Done</button></dialog>
+<div id="toast" role="status" hidden></div>
+<script src="/app.js"></script>
+</body></html>

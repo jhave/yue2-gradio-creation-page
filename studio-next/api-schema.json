@@ -1,0 +1,395 @@
+{
+  "/one_click_generate_step": {
+    "parameters": [
+      {
+        "parameter_name": "style",
+        "parameter_default": "",
+        "type": {
+          "type": "string"
+        }
+      },
+      {
+        "parameter_name": "lyrics",
+        "parameter_default": "",
+        "type": {
+          "type": "string"
+        }
+      },
+      {
+        "parameter_name": "custom_title",
+        "parameter_default": "",
+        "type": {
+          "type": "string"
+        }
+      },
+      {
+        "parameter_name": "score_temp",
+        "parameter_default": 0.75,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 0.1 and 2.0"
+        }
+      },
+      {
+        "parameter_name": "score_top_p",
+        "parameter_default": 0.9,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 0.1 and 1.0"
+        }
+      },
+      {
+        "parameter_name": "score_rep_pen",
+        "parameter_default": 1.005,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 1.0 and 1.3"
+        }
+      },
+      {
+        "parameter_name": "score_top_k",
+        "parameter_default": 30,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 5 and 200"
+        }
+      },
+      {
+        "parameter_name": "score_pen_win",
+        "parameter_default": 100,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 1 and 100"
+        }
+      },
+      {
+        "parameter_name": "sem_temp",
+        "parameter_default": 1.15,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 0.1 and 2.0"
+        }
+      },
+      {
+        "parameter_name": "sem_top_p",
+        "parameter_default": 0.95,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 0.1 and 1.0"
+        }
+      },
+      {
+        "parameter_name": "rep_pen",
+        "parameter_default": 1.18,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 1.0 and 1.5"
+        }
+      },
+      {
+        "parameter_name": "sem_top_k",
+        "parameter_default": 100,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 5 and 400"
+        }
+      },
+      {
+        "parameter_name": "sem_pen_win",
+        "parameter_default": 50,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 1 and 100"
+        }
+      },
+      {
+        "parameter_name": "sem_min_tokens",
+        "parameter_default": 200,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 0 and 2000"
+        }
+      },
+      {
+        "parameter_name": "sem_max_tokens",
+        "parameter_default": 9000,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 1000 and 14000"
+        }
+      },
+      {
+        "parameter_name": "cfg_scale",
+        "parameter_default": 1.0,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 1.0 and 3.0"
+        }
+      },
+      {
+        "parameter_name": "flow_steps",
+        "parameter_default": 12,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 8 and 32"
+        }
+      },
+      {
+        "parameter_name": "seed",
+        "parameter_default": 404,
+        "type": {
+          "type": "integer"
+        }
+      },
+      {
+        "parameter_name": "cot_mode",
+        "parameter_default": "full",
+        "type": {
+          "type": "string",
+          "enum": [
+            "full",
+            "melody",
+            "off"
+          ]
+        }
+      },
+      {
+        "parameter_name": "append_tag",
+        "parameter_default": true,
+        "type": {
+          "type": "boolean"
+        }
+      },
+      {
+        "parameter_name": "audio_format",
+        "parameter_default": "mp3 320 + latents",
+        "type": {
+          "type": "string",
+          "enum": [
+            "mp3 320 + latents",
+            "mp3 192 + latents",
+            "flac + mp3",
+            "flac (lossless)"
+          ]
+        }
+      },
+      {
+        "parameter_name": "preset_name",
+        "parameter_default": "Studio default",
+        "type": {
+          "type": "string",
+          "enum": [
+            "Studio default"
+          ]
+        }
+      },
+      {
+        "parameter_name": "song_name",
+        "parameter_default": null,
+        "type": {
+          "type": "string"
+        }
+      }
+    ]
+  },
+  "/synthesize_audio_step": {
+    "parameters": [
+      {
+        "parameter_name": "style",
+        "parameter_default": "",
+        "type": {
+          "type": "string"
+        }
+      },
+      {
+        "parameter_name": "lyrics",
+        "parameter_default": "",
+        "type": {
+          "type": "string"
+        }
+      },
+      {
+        "parameter_name": "abc_text",
+        "parameter_default": "",
+        "type": {
+          "type": "string"
+        }
+      },
+      {
+        "parameter_name": "seed",
+        "parameter_default": 404,
+        "type": {
+          "type": "integer"
+        }
+      },
+      {
+        "parameter_name": "ode_steps",
+        "parameter_default": 12,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 8 and 32"
+        }
+      },
+      {
+        "parameter_name": "sem_temp",
+        "parameter_default": 1.15,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 0.1 and 2.0"
+        }
+      },
+      {
+        "parameter_name": "sem_top_p",
+        "parameter_default": 0.95,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 0.1 and 1.0"
+        }
+      },
+      {
+        "parameter_name": "rep_pen",
+        "parameter_default": 1.18,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 1.0 and 1.5"
+        }
+      },
+      {
+        "parameter_name": "cfg_scale",
+        "parameter_default": 1.0,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 1.0 and 3.0"
+        }
+      },
+      {
+        "parameter_name": "track_title",
+        "parameter_default": "",
+        "type": {
+          "type": "string"
+        }
+      },
+      {
+        "parameter_name": "preset_name",
+        "parameter_default": "Studio default",
+        "type": {
+          "type": "string",
+          "enum": [
+            "Studio default"
+          ]
+        }
+      },
+      {
+        "parameter_name": "score_temp",
+        "parameter_default": 0.75,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 0.1 and 2.0"
+        }
+      },
+      {
+        "parameter_name": "score_top_p",
+        "parameter_default": 0.9,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 0.1 and 1.0"
+        }
+      },
+      {
+        "parameter_name": "score_rep_pen",
+        "parameter_default": 1.005,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 1.0 and 1.3"
+        }
+      },
+      {
+        "parameter_name": "sem_top_k",
+        "parameter_default": 100,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 5 and 400"
+        }
+      },
+      {
+        "parameter_name": "sem_pen_win",
+        "parameter_default": 50,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 1 and 100"
+        }
+      },
+      {
+        "parameter_name": "sem_min_tokens",
+        "parameter_default": 200,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 0 and 2000"
+        }
+      },
+      {
+        "parameter_name": "sem_max_tokens",
+        "parameter_default": 9000,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 1000 and 14000"
+        }
+      },
+      {
+        "parameter_name": "score_top_k",
+        "parameter_default": 30,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 5 and 200"
+        }
+      },
+      {
+        "parameter_name": "score_pen_win",
+        "parameter_default": 100,
+        "type": {
+          "type": "number",
+          "description": "numeric value between 1 and 100"
+        }
+      },
+      {
+        "parameter_name": "cot_mode",
+        "parameter_default": "full",
+        "type": {
+          "type": "string",
+          "enum": [
+            "full",
+            "melody",
+            "off"
+          ]
+        }
+      },
+      {
+        "parameter_name": "append_tag",
+        "parameter_default": true,
+        "type": {
+          "type": "boolean"
+        }
+      },
+      {
+        "parameter_name": "audio_format",
+        "parameter_default": "mp3 320 + latents",
+        "type": {
+          "type": "string",
+          "enum": [
+            "mp3 320 + latents",
+            "mp3 192 + latents",
+            "flac + mp3",
+            "flac (lossless)"
+          ]
+        }
+      },
+      {
+        "parameter_name": "song_name",
+        "parameter_default": null,
+        "type": {
+          "type": "string"
+        }
+      }
+    ]
+  }
+}
