@@ -45,11 +45,9 @@ with a score or style prompt. Title and unrelated fields are kept; Undo restores
 only the fields affected by the transfer. The notice and its Undo action disappear
 on the next composition edit.
 
-**All · full composition** transfers the title, prompt, lyrics, score, and all
-sixteen settings. It saves the current composition first and provides Undo.
-
-**New draft from track** imports the whole composition after saving the current
-one. **Copy** is available for manual reuse, and export is under More.
+**New draft from track** imports the title, prompt, lyrics, score, and all sixteen
+settings after saving the current composition. The Send to Create menu is for
+selective transfers. **Copy** is available for manual reuse, and export is under More.
 
 Typing recovers the current composition in the same browser. Saved drafts are
 written when Save draft or Create is pressed, and before a full import or
@@ -86,6 +84,7 @@ score locally and works offline. Its license is in `web/abcjs_basic.LICENSE`.
 - Select a track and choose **Edit** beside its title in the right panel to rename it.
   The local display name appears in the library, player, and listening-page export;
   original metadata and audio filenames remain unchanged.
+- Ratings update their stars immediately on the first click, including after a library refresh.
 
 ## Validation and current limits
 

@@ -92,7 +92,7 @@ function renderDetail() {
     <form id="rename-track-form" hidden><label class="field-label">Track title<input id="track-title-input" value="${esc(t.title)}" required maxlength="160"></label><div class="rename-actions"><button type="submit" class="quiet-button">Save title</button><button type="button" class="text-button" id="cancel-track-title">Cancel</button></div></form>
     <div class="detail-meta">${t.duration?timeText(t.duration)+' · ':''}${esc(dateText(t.created))} · ${t.rating===null?'Not rated':t.rating+'/5 stars'}</div>
     <div class="detail-actions"><button class="primary-button" id="detail-play">${t.id===playingId&&!audio.paused?'Ⅱ Pause':'▶ Play'}</button><button class="quiet-button" id="use-as-draft">New draft from track</button></div>
-    <details class="transfer-box" open><summary>Send to Create</summary><div class="transfer-controls"><select id="transfer-part" aria-label="What to send to Create"><option value="settings-score">Settings + score</option><option value="all">All · full composition</option><option value="settings-style">Settings + style prompt</option><option value="settings">Generation settings only</option><option value="score">ABC score only</option><option value="style">Append style prompt</option><option value="lyrics">Append lyrics</option></select><button class="quiet-button" id="send-to-create">Send →</button></div><p>Changes only the parts you choose.</p></details>
+    <details class="transfer-box" open><summary>Send to Create</summary><div class="transfer-controls"><select id="transfer-part" aria-label="What to send to Create"><option value="settings-score">Settings + score</option><option value="settings-style">Settings + style prompt</option><option value="settings">Generation settings only</option><option value="score">ABC score only</option><option value="style">Append style prompt</option><option value="lyrics">Append lyrics</option></select><button class="quiet-button" id="send-to-create">Send →</button></div><p>Changes only the parts you choose.</p></details>
     <div class="rating-control" aria-label="Rate this track">${[1,2,3,4,5].map(n=>`<button class="${t.rating>=n?'on':''}" data-rate="${n}" aria-label="Rate ${n} star${n===1?'':'s'}">★</button>`).join('')}<button data-rate="0" class="clear">0</button><button data-rate="clear" class="clear">Clear</button></div>
     <div class="detail-playlist"><select id="add-playlist" aria-label="Choose playlist"><option value="">Add to a playlist…</option>${local.playlists.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select><button id="add-to-playlist" class="quiet-button">Add</button></div>
     <section class="detail-section"><div class="detail-section-heading"><h3>Style & production</h3><span><button class="text-button" data-send="style" aria-label="Send style prompt to Create">Send to Create →</button> <button class="text-button" data-copy="style" aria-label="Copy style prompt">Copy</button></span></div><p class="detail-copy">${esc(t.style||'No prompt saved for this track.')}</p></section>
@@ -112,7 +112,7 @@ function renderDetail() {
   };
   $('detail-play').onclick=()=>playTrack(t.id);
   $('use-as-draft').onclick=async()=>{
-    try {await preserveCurrentDraft();fillDraft(t);rememberComposition();showView('create');toast('New draft from track · your previous composition was saved');}catch(e){toast(e.message);}
+    try {const saved=await preserveCurrentDraft();fillDraft(t);rememberComposition();showView('create');toast('New draft from track'+(saved?' · your previous composition was saved':''));}catch(e){toast(e.message);}
   };
   $('send-to-create').onclick=()=>sendTrackParts(t,$('transfer-part').value);
   $('track-detail').querySelectorAll('[data-send]').forEach(b=>b.onclick=()=>sendTrackParts(t,b.dataset.send));
@@ -129,7 +129,20 @@ function renderDetail() {
     await persist('Added to '+p.name);renderCollections();renderList();
   };
   $('save-notes').onclick=async()=>{const notes=$('track-notes').value;local.overrides[t.id]={...local.overrides[t.id],notes};t.notes=notes;await persist('Listening notes saved');};
-  $('track-detail').querySelectorAll('[data-rate]').forEach(b=>b.onclick=async()=>{const rating=b.dataset.rate==='clear'?null:Number(b.dataset.rate);local.overrides[t.id]={...local.overrides[t.id],rating};t.rating=rating;await persist('Rating saved in this workspace');renderDetail();renderCollections();renderList();});
+  $('track-detail').querySelectorAll('[data-rate]').forEach(b=>b.onclick=async()=>{
+    const rating=b.dataset.rate==='clear'?null:Number(b.dataset.rate);
+    const current=track(t.id)||t,previousRating=current.rating,previousOverride=local.overrides[t.id];
+    local.overrides[t.id]={...previousOverride,rating};current.rating=rating;
+    renderDetail();renderCollections();renderList();
+    try {await saveLocal();toast('Rating saved');}
+    catch(error){
+      if(local.overrides[t.id]?.rating===rating){
+        if(previousOverride)local.overrides[t.id]=previousOverride;else delete local.overrides[t.id];
+        (track(t.id)||t).rating=previousRating;renderDetail();renderCollections();renderList();
+      }
+      toast(error.message);
+    }
+  });
 }
 async function persist(message) {try {await saveLocal();toast(message);}catch(e){toast(e.message);}}
 function revealPlaying() {
@@ -210,11 +223,7 @@ function restoreComposition(snapshot) {
 }
 async function sendTrackParts(t,part) {
   const previous=captureComposition();
-  let changed=false,preserved=false;
-  if(part==='all') {
-    try {preserved=await preserveCurrentDraft();previous.draftId=draftId;}catch(error){toast(error.message);return;}
-    fillDraft(t);changed=true;
-  }
+  let changed=false;
   if(['settings','settings-score','settings-style'].includes(part)) {
     for(const [key,value]of Object.entries(t.parameters||{}))if(Object.hasOwn(defaults,key)&&$(key)&&value!==null){$(key).value=value;changed=true;}
   }
@@ -223,10 +232,10 @@ async function sendTrackParts(t,part) {
   if(part==='lyrics'&&t.lyrics){$('draft-lyrics').value=[$('draft-lyrics').value.trim(),t.lyrics].filter(Boolean).join('\n\n');changed=true;}
   if(!changed){toast('This track has no saved '+part.replace('-',' + '));return;}
   transferUndo={draftId:previous.draftId,values:Object.fromEntries(Object.entries(previous.values).filter(([id,value])=>$(id).value!==value))};
-  const labels={'all':'All sent','settings-score':'Settings and score sent','settings-style':'Settings sent and style prompt appended','settings':'Generation settings sent','score':'ABC score sent','style':'Style prompt appended','lyrics':'Lyrics appended'};
-  $('transfer-message').textContent=labels[part]+' from '+t.title+(preserved?' · previous composition saved':'');
+  const labels={'settings-score':'Settings and score sent','settings-style':'Settings sent and style prompt appended','settings':'Generation settings sent','score':'ABC score sent','style':'Style prompt appended','lyrics':'Lyrics appended'};
+  $('transfer-message').textContent=labels[part]+' from '+t.title;
   $('transfer-status').hidden=false;rememberComposition();showView('create');if($('draft-sheet-details').open)drawScore('draft-sheet',$('draft-score').value);
-  toast(labels[part]+(part==='all'?(preserved?' · previous composition saved':' · full composition loaded'):' · your other fields are kept'));
+  toast(labels[part]+' · your other fields are kept');
 }
 async function preserveCurrentDraft() {
   const hasText=['draft-title','draft-style','draft-lyrics','draft-score'].some(id=>$(id).value.trim());

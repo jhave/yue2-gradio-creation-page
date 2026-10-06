@@ -12,3 +12,5 @@
 
 .sidebar>nav[aria-label=Workspace]{margin-top:24px}
 .detail-title-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.detail-title-row .detail-title{flex:1;min-width:0}.rename-actions{display:flex;align-items:center;gap:8px;margin-bottom:15px}#rename-track-form .field-label{margin-bottom:10px}#rename-track-form input{font-size:13px}
+
+.topbar #refresh{margin-left:auto}

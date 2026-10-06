@@ -49,3 +49,9 @@ panel immediately even after a library refresh, survives a page reload, and
 leaves the source files unchanged. Renamed titles are included in the listening
 export. No browser errors were observed, and no test data was added to the
 personal library.
+
+The duplicate All menu choice was subsequently removed in favor of the retained
+New draft from track button. DESIGN SANDBOX and the old-studio link were removed.
+An isolated browser check reproduced the refresh-before-rating case and verified
+that the first click immediately displayed four active stars and a 4/5 label;
+the rating persisted after reload. No personal ratings were changed by this check.
