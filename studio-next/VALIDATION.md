@@ -26,6 +26,13 @@ Browser verification confirmed:
 
 The independent web server was refreshed while the existing engine and detached
 render worker continued with unchanged process IDs. No second model was loaded,
-no new render was submitted, and the active creation was not cancelled. Full
-model completion remained pending at the time of these checks. Live deployment
-to glia.ca was not performed.
+no additional render was submitted, and the active creation was not cancelled.
+Live deployment to glia.ca was not performed.
+
+The active test subsequently completed successfully. The library grew from 43
+to 44 playable tracks. The new result is a 259.9-second, 48 kHz stereo MP3
+(about 4.4 MB) with 4,463 characters of saved ABC notation. The independent MP3
+copy matched the original engine output by SHA-256. Soundfile read the first
+second successfully and confirmed non-silent samples. No subjective listening
+assessment is implied. The new track is unrated, so it stays out of the public
+favorites page until rated four or five stars.

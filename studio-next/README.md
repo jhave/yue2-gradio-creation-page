@@ -87,8 +87,10 @@ request validation, audio seeking, empty-checkout behavior, endpoint selection,
 and copying a mocked completed result. Additional checks verify honest timing,
 history-based estimates, current favorites export, and privacy of the manifest.
 Browser checks cover selective transfers, preserving the current composition,
-engraved scores, and standalone audio playback. A real model render is being
-evaluated; completed end-to-end generation is not yet verified.
+engraved scores, and standalone audio playback. The first real model render
+completed through the existing engine: a 259.9-second stereo MP3 and saved ABC
+score appeared in the library, and the independent audio copy matched the
+engine output by SHA-256. See `VALIDATION.md` for the recorded checks.
 
 Use one render at a time across both interfaces. The existing Gradio studio's
 Stop control handles cancellation. Multiple simultaneous editing sessions,

@@ -20,8 +20,8 @@ cd studio-next && python3 server.py --port 7861
 ```
 
 See its README to connect an existing library and renderer. Personal music and
-workspace data are excluded from Git. Full model rendering through Studio Next
-still needs an end-to-end test before switching the demo workflow.
+workspace data are excluded from Git. The first end-to-end render through Studio
+Next completed successfully; the original app remains available alongside it.
 
 Studio Next also provides elapsed render time, expandable stage feedback, and
 engraved sheet music. Its [independent listening-page exporter](studio-next/PUBLISHING.md)
