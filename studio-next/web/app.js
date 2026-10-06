@@ -65,10 +65,9 @@ function renderCollections() {
 }
 function renderList() {
   const items=filteredTracks();
-  const names={demo:['Demo selection','Twelve favorites, plus three recent experiments.'],all:['All renders','Every playable track, discovered directly from your outputs.'],favorites:['Favorites','The pieces you rated four or five stars.'],unrated:['New & unrated','Newest first. A place to hear what happens next.']};
-  const description=names[collection]||[local.playlists.find(p=>'playlist:'+p.id===collection)?.name||'Playlist','A collection with its own order and mood.'];
-  $('collection-title').textContent=description[0];$('collection-description').textContent=description[1];
-  document.querySelector('.collection-art span').textContent=items.length;
+  const names={demo:'Demo selection',all:'All renders',favorites:'Favorites',unrated:'New & unrated'};
+  const name=names[collection]||local.playlists.find(p=>'playlist:'+p.id===collection)?.name||'Playlist';
+  $('library-view').setAttribute('aria-label',name+' library');
   $('track-count').textContent=`${items.length} track${items.length===1?'':'s'} · ${timeText(items.reduce((sum,t)=>sum+Number(t.duration||0),0))} total`;
   $('track-list').innerHTML=items.map(t=>`<div class="track-row ${t.id===selectedId?'selected':''} ${t.id===playingId?'playing':''}" role="listitem" data-track="${t.id}"><button class="row-play" data-play="${t.id}" aria-label="${t.id===playingId&&!audio.paused?'Pause':'Play'} ${esc(t.title)}">${t.id===playingId&&!audio.paused?'Ⅱ':'▶'}</button><div class="track-cover" style="${palette(t)}" aria-hidden="true">${esc(t.title.slice(0,1))}</div><button class="row-title" data-select="${t.id}" aria-label="Show details for ${esc(t.title)}"><strong>${esc(t.title)}</strong><small>${esc(dateText(t.created))} · ${esc(t.style||'No style prompt saved')}</small></button><span class="stars ${t.rating===null?'unrated':''}">${t.rating===null?'Unrated':t.rating===0?'0 / 5':'★'.repeat(t.rating)}</span><span class="track-duration">${t.duration?timeText(t.duration):'—'}</span></div>`).join('');
   $('library-empty').hidden=items.length>0;

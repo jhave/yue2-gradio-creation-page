@@ -109,3 +109,12 @@ advancing position; the twenty composition fields were unchanged in Create.
 19 automated checks, JavaScript syntax validation, and diff checks passed.
 Only temporary silent WAV fixtures were played; no model generation was
 submitted, restarted, or stopped.
+
+## Compact library header
+
+Removed the library’s large heading, description, and decorative artwork; the
+sidebar still identifies the active collection and the library region retains
+an accessible collection label. Browser verification confirmed that search,
+sorting, and switching to Favorites still rendered the correct track rows.
+The toolbar begins at 105 pixels in the default preview viewport. JavaScript
+syntax and diff checks passed. No music or saved workspace data was changed.

@@ -78,6 +78,9 @@ in `web/abcjs_basic.LICENSE`.
 
 ## Library and playback
 
+The library starts with search, sorting, and tracks; the active collection is
+identified in the sidebar, without a large heading, description, or artwork.
+
 - New outputs appear on refresh, every 30 seconds, and when returning to the tab.
 - All renders, favorites, and New & unrated separate ratings from unreviewed work.
 - Demo selection uses an optional local `data/starter.json` and `media/` snapshot.
