@@ -38,7 +38,8 @@ changing connection settings. This interface never loads its own model.
 ## Reuse while composing
 
 Select a track to inspect it without changing playback. Use **Send to Create →**
-beside its style prompt, lyrics, ABC score, or generation settings. The transfer
+beside its style prompt, lyrics, or ABC score, or **Send settings to draft →**
+under Generation settings. The transfer
 opens the composition view and changes only the selected part. Prompt and lyrics
 are appended so existing writing remains. The transfer menu also sends settings
 with a score or style prompt. Title and unrelated fields are kept; Undo restores
@@ -69,7 +70,11 @@ bar and heartbeat-derived flow count are not treated as an accurate time forecas
 The composer also has a **Sheet music** disclosure beneath ABC notation. Saved
 tracks offer **View sheet music** in their score/settings section. The bundled
 [abcjs 6.4.4](https://docs.abcjs.net/visual/render-abc-options.html) engraves the
-score locally and works offline. Its license is in `web/abcjs_basic.LICENSE`.
+score locally and works offline. Previews identify the saved track versus the
+current draft, expose the exact saved ABC, and show parser warnings when the
+source is malformed. The notation is a composition plan, not a transcription of
+the synthesized audio; the viewer never invents or repairs notes. Its license is
+in `web/abcjs_basic.LICENSE`.
 
 ## Library and playback
 
@@ -104,8 +109,8 @@ score appeared in the library, and the independent audio copy matched the
 engine output by SHA-256. See `VALIDATION.md` for the recorded checks.
 
 Use one render at a time across both interfaces. The existing Gradio studio's
-Stop control handles cancellation. Multiple simultaneous editing sessions,
-musical staves, and latent re-solving are not implemented here yet.
+Stop control handles cancellation. Multiple simultaneous editing sessions and latent re-solving are not implemented
+here yet.
 
 ## Files and isolation
 

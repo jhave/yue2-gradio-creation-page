@@ -55,3 +55,26 @@ New draft from track button. DESIGN SANDBOX and the old-studio link were removed
 An isolated browser check reproduced the refresh-before-rating case and verified
 that the first click immediately displayed four active stars and a 4/5 label;
 the rating persisted after reload. No personal ratings were changed by this check.
+
+## Settings transfer and score accuracy
+
+19 automated checks and the JavaScript syntax check passed. In an isolated
+browser workspace, Send settings to draft changed the seed to the inspected
+track’s seed while preserving the draft title, prompt, lyrics, and ABC exactly.
+Expanding More put both actions in normal document flow; its bottom remained
+12 pixels above the explanatory paragraph.
+
+The previous GUI and Studio Next bundle byte-identical abcjs 6.4.4. Both pass
+the complete ABC text directly to renderAbc; the old viewer differs only in
+scale and staff width. No notation is inferred from the audio. A completed
+render’s original 4,463-character ABC drew both voices and all 1,162 pitched
+note elements, matching the parser’s full-source note count through its final
+notes. It had zero parser warnings, and later score sections remained
+scrollable. A valid eight-note draft drew eight notes without a warning.
+
+The exact saved riverbed clay ABC instead produced 31 parser warnings, including
+an invalid tempo, malformed voice text, and an unclosed chord quote. These are
+now visible above the preview, with expandable diagnostic messages and exact
+saved source. Warnings are inserted as text; no source is repaired or rewritten.
+The saved-score title distinguishes the inspected track from the current draft
+and playing track. No render was started or stopped during these checks.

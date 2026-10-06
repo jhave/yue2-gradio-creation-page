@@ -97,9 +97,9 @@ function renderDetail() {
     <div class="detail-playlist"><select id="add-playlist" aria-label="Choose playlist"><option value="">Add to a playlist…</option>${local.playlists.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select><button id="add-to-playlist" class="quiet-button">Add</button></div>
     <section class="detail-section"><div class="detail-section-heading"><h3>Style & production</h3><span><button class="text-button" data-send="style" aria-label="Send style prompt to Create">Send to Create →</button> <button class="text-button" data-copy="style" aria-label="Copy style prompt">Copy</button></span></div><p class="detail-copy">${esc(t.style||'No prompt saved for this track.')}</p></section>
     <section class="detail-section"><div class="detail-section-heading"><h3>Lyrics</h3><span><button class="text-button" data-send="lyrics" aria-label="Send lyrics to Create">Send to Create →</button> <button class="text-button" data-copy="lyrics" aria-label="Copy lyrics">Copy</button></span></div><p class="detail-copy lyric-copy">${esc(t.lyrics||'Instrumental · no lyrics supplied')}</p></section>
-    <section class="detail-section"><details><summary>Score & generation settings</summary><button type="button" id="view-sheet" class="quiet-button">View sheet music ↗</button><div class="detail-section-heading"><h3>ABC score</h3><span><button class="text-button" data-send="score" aria-label="Send ABC score to Create">Send to Create →</button> <button class="text-button" data-copy="score" aria-label="Copy ABC score">Copy</button></span></div><pre>${esc(t.score||'No ABC score saved.')}</pre><div class="detail-section-heading"><h3>Generation settings</h3><span><button class="text-button" data-send="settings" aria-label="Send generation settings to Create">Send to Create →</button> <button class="text-button" data-copy="parameters" aria-label="Copy generation settings">Copy</button></span></div><pre>${esc(JSON.stringify(t.parameters,null,2))}</pre><p class="detail-copy">${esc(t.folder)}</p></details></section>
+    <section class="detail-section"><details><summary>Score & generation settings</summary><button type="button" id="view-sheet" class="quiet-button">View sheet music ↗</button><div class="detail-section-heading"><h3>ABC score</h3><span><button class="text-button" data-send="score" aria-label="Send ABC score to Create">Send to Create →</button> <button class="text-button" data-copy="score" aria-label="Copy ABC score">Copy</button></span></div><pre>${esc(t.score||'No ABC score saved.')}</pre><div class="detail-section-heading"><h3>Generation settings</h3><button class="text-button" data-copy="parameters" aria-label="Copy generation settings">Copy</button></div><button type="button" class="quiet-button settings-transfer" data-send="settings" title="Replaces only generation settings; keeps your draft title, prompt, lyrics, and score.">Send settings to draft →</button><pre>${esc(JSON.stringify(t.parameters,null,2))}</pre><p class="detail-copy">${esc(t.folder)}</p></details></section>
     <section class="detail-section"><h3>Listening notes</h3><textarea id="track-notes" rows="3" aria-label="Listening notes" placeholder="What works? Where could this go?">${esc(t.notes)}</textarea><button id="save-notes" class="quiet-button notes-save">Save notes</button></section>`;
-  $('view-sheet').onclick=()=>{$('sheet-title').textContent=t.title+' · sheet music';$('sheet-dialog').showModal();drawScore('library-sheet',t.score);};
+  $('view-sheet').onclick=()=>{const current=track(t.id)||t;$('sheet-title').textContent=current.title+' · saved score';$('library-score-source').textContent=current.score||'No ABC score saved.';$('sheet-dialog').showModal();drawScore('library-sheet',current.score);};
   $('edit-track-title').onclick=()=>{$('rename-track-form').hidden=false;$('edit-track-title').hidden=true;$('track-title-input').focus();$('track-title-input').select();};
   $('cancel-track-title').onclick=()=>{$('rename-track-form').hidden=true;$('edit-track-title').hidden=false;};
   $('rename-track-form').onsubmit=async e=>{
@@ -114,8 +114,8 @@ function renderDetail() {
   $('use-as-draft').onclick=async()=>{
     try {const saved=await preserveCurrentDraft();fillDraft(t);rememberComposition();showView('create');toast('New draft from track'+(saved?' · your previous composition was saved':''));}catch(e){toast(e.message);}
   };
-  $('send-to-create').onclick=()=>sendTrackParts(t,$('transfer-part').value);
-  $('track-detail').querySelectorAll('[data-send]').forEach(b=>b.onclick=()=>sendTrackParts(t,b.dataset.send));
+  $('send-to-create').onclick=()=>sendTrackParts(track(t.id)||t,$('transfer-part').value);
+  $('track-detail').querySelectorAll('[data-send]').forEach(b=>b.onclick=()=>sendTrackParts(track(t.id)||t,b.dataset.send));
   $('track-detail').querySelectorAll('[data-copy]').forEach(b=>b.onclick=async()=>{
     const value=b.dataset.copy==='parameters'?JSON.stringify(t.parameters,null,2):t[b.dataset.copy];
     if(!value){toast('No '+b.dataset.copy+' saved for this track');return;}
@@ -268,11 +268,20 @@ $('new-draft').onclick=async()=>{try{await preserveCurrentDraft();fillDraft();re
 $('composition-form').onsubmit=async e=>{e.preventDefault();try{const draft=collectDraft();draftId=draft.id;const index=local.drafts.findIndex(d=>d.id===draft.id);if(index<0)local.drafts.unshift(draft);else local.drafts[index]=draft;await saveLocal();rememberComposition();renderDrafts();$('draft-status').textContent='Draft saved · '+draft.title;toast('Draft saved');}catch(error){toast(error.message);}};
 function minutesText(seconds) {return Math.max(0,Number(seconds)/60).toFixed(1)+' min';}
 function drawScore(id,score) {
-  const paper=$(id);paper.replaceChildren();
+  const paper=$(id),warningBox=$(id+'-warnings');paper.replaceChildren();warningBox.replaceChildren();warningBox.hidden=true;
   if(!score?.trim()){paper.textContent='No score yet. Paste ABC or inspect a completed track.';return;}
   if(!window.ABCJS){paper.textContent='The notation renderer is unavailable. ABC text is still editable.';return;}
-  try {window.ABCJS.renderAbc(id,score,{responsive:'resize',staffwidth:800,add_classes:true});if(!paper.querySelector('svg'))paper.textContent='No readable musical notation found in this ABC.';}
-  catch {paper.textContent='This score could not be drawn. You can still inspect and edit its ABC text.';}
+  try {
+    const tunes=window.ABCJS.renderAbc(id,score,{responsive:'resize',staffwidth:800,add_classes:true});
+    const warnings=tunes.flatMap(tune=>tune.warnings||[]);
+    if(warnings.length) {
+      const heading=document.createElement('strong');heading.textContent='ABC has '+warnings.length+' parser warning'+(warnings.length===1?'':'s')+'. This preview may be unreliable.';
+      const details=document.createElement('details'),summary=document.createElement('summary'),list=document.createElement('ul');summary.textContent='Show score problems';
+      for(const warning of warnings){const item=document.createElement('li');item.textContent=String(warning).split(':  ')[0];list.append(item);}
+      details.append(summary,list);warningBox.append(heading,details);warningBox.hidden=false;
+    }
+    if(!paper.querySelector('svg'))paper.textContent='No readable musical notation found in this ABC.';
+  }catch {paper.replaceChildren();paper.textContent='This score could not be drawn. You can still inspect and edit its ABC text.';}
 }
 let scorePreviewTimer;
 $('close-sheet').onclick=()=>$('sheet-dialog').close();
