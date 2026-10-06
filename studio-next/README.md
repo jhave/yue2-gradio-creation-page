@@ -86,7 +86,9 @@ in `web/abcjs_basic.LICENSE`.
 - Track details collapse when playback pauses or ends, and in Create or Saved drafts,
   giving the main workspace the freed width. Details toggles the panel manually;
   selecting a library title or revealing the playing track also opens it.
-  Playback opens it automatically in Library. Changing views or playback state
+  Reopening with Details shows the player’s current track; explicit title
+  selection can inspect another track while listening. Playback and returning
+  to Library open it automatically on the playing track. Changing views or playback state
   restores this automatic behavior without changing audio or composition fields.
 - Playback continues across browser tabs by default; preferences offer pause on leaving.
 - Reload restores the last track and position paused. Composition fields recover locally.

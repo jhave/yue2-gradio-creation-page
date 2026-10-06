@@ -94,3 +94,18 @@ At the default 1,280-pixel viewport, collapsing returned 318 pixels to the main
 workspace (757 pixels expanded, 1,075 pixels collapsed). The toggle reports
 aria-expanded and the hidden panel is removed from keyboard navigation. Tests
 used only temporary data and submitted no generation requests.
+
+## Reopened details follow the player
+
+A two-track browser fixture reproduced the bug: track A played while track B
+was inspected, and closing/reopening Details incorrectly retained B. The fixed
+toggle selects the current player track before reopening, including in Create.
+Automatic opening during playback resumption or a return to Library also
+selects the playing track. Clicking B’s title still explicitly inspects B while
+A plays. Browser checks verified all of these cases.
+
+Reopening retained the exact audio source, uninterrupted playback, and a steadily
+advancing position; the twenty composition fields were unchanged in Create.
+19 automated checks, JavaScript syntax validation, and diff checks passed.
+Only temporary silent WAV fixtures were played; no model generation was
+submitted, restarted, or stopped.

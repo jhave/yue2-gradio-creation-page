@@ -79,6 +79,7 @@ function syncInspector(reset=false) {
   const inspector=$('track-inspector'),toggle=$('toggle-inspector');
   const active=Boolean(playingId&&!audio.paused&&!audio.ended&&!audio.error);
   const open=inspectorOverride??(view==='library'&&active);
+  if(open&&inspectorOverride===null&&track(playingId)&&selectedId!==playingId){selectedId=playingId;renderList();renderDetail();}
   if(!open&&inspector.contains(document.activeElement))toggle.focus();
   inspector.hidden=!open;
   document.querySelector('.app-shell').classList.toggle('inspector-collapsed',!open);
@@ -86,8 +87,14 @@ function syncInspector(reset=false) {
   toggle.setAttribute('aria-label',open?'Hide track details':'Show track details');
   toggle.textContent=open?'Details ›':'Details ‹';
 }
-function openInspector() {inspectorOverride=true;syncInspector();}
-$('toggle-inspector').onclick=()=>{inspectorOverride=$('track-inspector').hidden;syncInspector();};
+function openInspector(followPlaying=false) {
+  if(followPlaying&&track(playingId)){selectedId=playingId;renderList();renderDetail();}
+  inspectorOverride=true;syncInspector();
+}
+$('toggle-inspector').onclick=()=>{
+  if($('track-inspector').hidden)openInspector(true);
+  else {inspectorOverride=false;syncInspector();}
+};
 function showView(next) {
   view=next;
   for(const name of ['library','create','drafts']) $(name+'-view').hidden=name!==next;
