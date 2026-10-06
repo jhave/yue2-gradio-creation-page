@@ -7,7 +7,7 @@ const dateText = value => { const d = new Date(value); return Number.isNaN(d.val
 const colors = [['#315a49','#d8daa4','#91b09d'],['#536668','#dfc9ab','#9caeae'],['#625065','#d4b9a6','#a4aa9e'],['#53684b','#c5d5a5','#91a57c'],['#695b42','#dacb9b','#a7b49c'],['#435c74','#cad7b0','#96b6ad']];
 function palette(t) { const c=colors[parseInt(t.id.slice(0,4),16)%colors.length]; return `--c1:${c[0]};--c2:${c[1]};--c3:${c[2]}`; }
 let tracks=[], local={overrides:{},playlists:[],drafts:[]}, collection='demo', view='library', selectedId=null, playingId=null, queue=[], draftId=null;
-let toastTimer, scanTime='', saveChain=Promise.resolve(), loading=false, seeking=false, transferUndo=null, renderJob=null, renderPolling=false;
+let toastTimer, scanTime='', saveChain=Promise.resolve(), loading=false, seeking=false, transferUndo=null, renderJob=null, renderPolling=false, inspectorOverride=null;
 let preferences={continuous:true,pauseHidden:false,volume:.8};
 try { preferences={...preferences,...JSON.parse(localStorage.getItem('yue2-next-preferences')||'{}')}; } catch {}
 audio.volume=preferences.volume;
@@ -74,12 +74,27 @@ function renderList() {
   $('library-empty').hidden=items.length>0;
   $('play-collection').disabled=!items.length;
 }
+function syncInspector(reset=false) {
+  if(reset)inspectorOverride=null;
+  const inspector=$('track-inspector'),toggle=$('toggle-inspector');
+  const active=Boolean(playingId&&!audio.paused&&!audio.ended&&!audio.error);
+  const open=inspectorOverride??(view==='library'&&active);
+  if(!open&&inspector.contains(document.activeElement))toggle.focus();
+  inspector.hidden=!open;
+  document.querySelector('.app-shell').classList.toggle('inspector-collapsed',!open);
+  toggle.setAttribute('aria-expanded',String(open));
+  toggle.setAttribute('aria-label',open?'Hide track details':'Show track details');
+  toggle.textContent=open?'Details ›':'Details ‹';
+}
+function openInspector() {inspectorOverride=true;syncInspector();}
+$('toggle-inspector').onclick=()=>{inspectorOverride=$('track-inspector').hidden;syncInspector();};
 function showView(next) {
   view=next;
   for(const name of ['library','create','drafts']) $(name+'-view').hidden=name!==next;
   document.querySelectorAll('[data-view]').forEach(b=>{b.classList.toggle('active',b.dataset.view===next);b.classList.toggle('selected',b.dataset.view===next);if(b.getAttribute('role')==='tab') b.setAttribute('aria-selected',String(b.dataset.view===next));});
   if(next==='library') renderList();
   if(next==='drafts') renderDrafts();
+  syncInspector(true);
   // The audio element lives outside all views and is never remounted here.
 }
 function renderDetail() {
@@ -149,7 +164,7 @@ function revealPlaying() {
   if(!track(playingId)) {toast('Choose a track and press play first');return;}
   selectedId=playingId;showView('library');
   if(!filteredTracks().some(t=>t.id===playingId)) {collection=track(playingId).curated?'demo':'all';$('search').value='';renderCollections();}
-  renderList();renderDetail();
+  renderList();renderDetail();openInspector();
   document.querySelector(`[data-track="${playingId}"]`)?.scrollIntoView({block:'center',behavior:'smooth'});
 }
 async function playTrack(id, useQueue=false) {
@@ -178,12 +193,12 @@ function stepTrack(step) {
   const next=(Math.max(index,0)+step+queue.length)%queue.length;
   playTrack(queue[next],true);
 }
-audio.addEventListener('play',()=>{updatePlayer();renderList();renderDetail();});
-audio.addEventListener('pause',()=>{updatePlayer();renderList();renderDetail();storePosition();});
+audio.addEventListener('play',()=>{updatePlayer();renderList();renderDetail();syncInspector(true);});
+audio.addEventListener('pause',()=>{updatePlayer();renderList();renderDetail();storePosition();syncInspector(true);});
 audio.addEventListener('loadedmetadata',updatePlayer);
 audio.addEventListener('timeupdate',()=>{updatePlayer();storePosition();});
-audio.addEventListener('ended',()=>{if(preferences.continuous&&queue.length&&queue.indexOf(playingId)<queue.length-1)stepTrack(1);});
-audio.addEventListener('error',()=>toast('Audio is unavailable. Try Refresh library or another track.'));
+audio.addEventListener('ended',()=>{syncInspector(true);if(preferences.continuous&&queue.length&&queue.indexOf(playingId)<queue.length-1)stepTrack(1);});
+audio.addEventListener('error',()=>{syncInspector(true);toast('Audio is unavailable. Try Refresh library or another track.');});
 function storePosition(){if(playingId)localStorage.setItem('yue2-next-position',JSON.stringify({id:playingId,position:audio.currentTime,queue}));}
 $('toggle-play').onclick=()=>{if(playingId)playTrack(playingId);else if(filteredTracks()[0])playTrack(filteredTracks()[0].id);};
 $('previous').onclick=()=>{if(audio.currentTime>3)audio.currentTime=0;else stepTrack(-1);};$('next').onclick=()=>stepTrack(1);
@@ -195,7 +210,7 @@ $('pause-hidden').onchange=()=>{preferences.pauseHidden=$('pause-hidden').checke
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&preferences.pauseHidden)audio.pause();if(!document.hidden)loadLibrary();});
 $('show-playing').onclick=revealPlaying;$('player-reveal').onclick=revealPlaying;
 $('playback-settings').onclick=()=>$('playback-popover').hidden=!$('playback-popover').hidden;
-$('track-list').onclick=e=>{const play=e.target.closest('[data-play]'),select=e.target.closest('[data-select]');if(play)playTrack(play.dataset.play);else if(select){selectedId=select.dataset.select;renderList();renderDetail();}};
+$('track-list').onclick=e=>{const play=e.target.closest('[data-play]'),select=e.target.closest('[data-select]');if(play)playTrack(play.dataset.play);else if(select){selectedId=select.dataset.select;renderList();renderDetail();openInspector();}};
 $('collections').onclick=e=>{const b=e.target.closest('[data-collection]');if(b){collection=b.dataset.collection;$('sort').value=['all','unrated'].includes(collection)?'newest':'best';showView('library');renderCollections();renderList();}};
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>showView(b.dataset.view));
 $('search').oninput=renderList;$('sort').onchange=renderList;

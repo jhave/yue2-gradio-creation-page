@@ -2,7 +2,7 @@
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>YuE2 · Studio Next</title><link rel="stylesheet" href="/style.css"></head>
 <body>
-<div class="app-shell">
+<div class="app-shell inspector-collapsed">
   <aside class="sidebar">
     <a class="brand" href="/" aria-label="YuE2 Studio Next home"><span class="brand-icon">y.</span><span>YuE2 <small>STUDIO NEXT</small></span></a>
     <nav aria-label="Workspace"><button class="nav-button active" data-view="library">▤ <span>Library</span></button><button class="nav-button" data-view="create">♫ <span>Create</span></button><button class="nav-button" data-view="drafts">▧ <span>Saved drafts</span><span id="draft-count" class="count">0</span></button></nav>
@@ -11,7 +11,7 @@
     <div class="sidebar-foot"><span class="status-dot"></span> Local workspace<br><small>Alternative studio · v0.2</small></div>
   </aside>
   <main>
-    <header class="topbar"><div class="view-tabs" role="tablist" aria-label="Studio view"><button class="selected" data-view="library" role="tab" aria-selected="true">Library</button><button data-view="create" role="tab" aria-selected="false">Create</button></div><button id="refresh" class="quiet-button">↻ Refresh library</button></header>
+    <header class="topbar"><div class="view-tabs" role="tablist" aria-label="Studio view"><button class="selected" data-view="library" role="tab" aria-selected="true">Library</button><button data-view="create" role="tab" aria-selected="false">Create</button></div><button id="toggle-inspector" class="quiet-button" aria-controls="track-inspector" aria-expanded="false" aria-label="Show track details">Details ‹</button><button id="refresh" class="quiet-button">↻ Refresh library</button></header>
     <section id="library-view" class="view">
       <div class="page-heading"><div><div class="eyebrow">YOUR LISTENING ROOM</div><h1 id="collection-title">Demo selection</h1><p id="collection-description">The pieces worth coming back to.</p></div><div class="collection-art" aria-hidden="true"><span>15</span><small>SELECTED<br>RENDERS</small></div></div>
       <div class="library-toolbar"><label class="search-box"><span>⌕</span><input id="search" type="search" placeholder="Search titles, prompts, lyrics…" aria-label="Search tracks"></label><select id="sort" aria-label="Sort tracks"><option value="best">Best rated</option><option value="newest">Newest first</option><option value="title">Title A–Z</option></select><button id="play-collection" class="quiet-button">▶ Play collection</button></div>
@@ -34,7 +34,7 @@
     </section>
     <section id="drafts-view" class="view" hidden><div class="page-heading"><div><div class="eyebrow">IDEAS IN PROGRESS</div><h1>Saved drafts</h1><p>Prompts, lyrics, scores, and settings together.</p></div></div><div id="draft-list"></div></section>
   </main>
-  <aside class="inspector" aria-label="Track details"><div class="inspector-heading"><span>TRACK DETAILS</span><button id="show-playing" class="quiet-button">Now playing ↗</button></div><div id="track-detail"></div></aside>
+  <aside id="track-inspector" class="inspector" aria-label="Track details" hidden><div class="inspector-heading"><span>TRACK DETAILS</span><button id="show-playing" class="quiet-button">Now playing ↗</button></div><div id="track-detail"></div></aside>
 </div>
 <footer class="player" aria-label="Persistent audio player">
   <button class="player-art" id="player-reveal" aria-label="Show playing track">♫</button><div class="player-info"><strong id="playing-title">Choose something to listen to</strong><span id="playing-subtitle">Your player stays with you across views</span></div>

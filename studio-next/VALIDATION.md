@@ -78,3 +78,19 @@ now visible above the preview, with expandable diagnostic messages and exact
 saved source. Warnings are inserted as text; no source is repaired or rewritten.
 The saved-score title distinguishes the inspected track from the current draft
 and playing track. No render was started or stopped during these checks.
+
+## Automatic track-details collapse
+
+19 automated checks, the JavaScript syntax check, and diff checks passed. An
+isolated browser fixture with a real, silent 60-second WAV verified that the
+right panel starts collapsed, opens on explicit title selection without playback,
+opens automatically during Library playback, and collapses on pause and end.
+Entering Create collapsed it while the same audio source continued playing;
+returning to Library reopened it. Details could reopen or hide it manually in
+Create, and revealing a paused track also opened it. All twenty composition
+fields remained unchanged across these layout and playback transitions.
+
+At the default 1,280-pixel viewport, collapsing returned 318 pixels to the main
+workspace (757 pixels expanded, 1,075 pixels collapsed). The toggle reports
+aria-expanded and the hidden panel is removed from keyboard navigation. Tests
+used only temporary data and submitted no generation requests.

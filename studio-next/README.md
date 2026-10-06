@@ -83,6 +83,11 @@ in `web/abcjs_basic.LICENSE`.
 - Demo selection uses an optional local `data/starter.json` and `media/` snapshot.
 - Demo audio remains copied locally, while available source tracks supply current ratings and text.
 - One player keeps its track and position across Library, Create, and Saved drafts.
+- Track details collapse when playback pauses or ends, and in Create or Saved drafts,
+  giving the main workspace the freed width. Details toggles the panel manually;
+  selecting a library title or revealing the playing track also opens it.
+  Playback opens it automatically in Library. Changing views or playback state
+  restores this automatic behavior without changing audio or composition fields.
 - Playback continues across browser tabs by default; preferences offer pause on leaving.
 - Reload restores the last track and position paused. Composition fields recover locally.
 - Playlists, ratings, notes, and drafts are saved in this workspace's `data/state.json`.
