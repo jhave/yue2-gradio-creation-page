@@ -36,3 +36,16 @@ copy matched the original engine output by SHA-256. Soundfile read the first
 second successfully and confirmed non-silent samples. No subjective listening
 assessment is implied. The new track is unrated, so it stays out of the public
 favorites page until rated four or five stars.
+
+## Compact Create and title editing
+
+19 automated checks passed after adding isolated title edits and title validation.
+Browser checks in a temporary workspace verified that All transfers all twenty
+composition fields, saves the previous draft, and Undo restores every field.
+Saving after Undo reuses the same draft ID. Editing a field clears the transfer
+notice. The extra Create heading and New composition sidebar control are absent;
+Start fresh remains available under More. Renaming a track updates the right
+panel immediately even after a library refresh, survives a page reload, and
+leaves the source files unchanged. Renamed titles are included in the listening
+export. No browser errors were observed, and no test data was added to the
+personal library.

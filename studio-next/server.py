@@ -271,13 +271,15 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(state, dict) or not isinstance(state.get("overrides"), dict) or not all(isinstance(state.get(k), list) for k in ("playlists", "drafts")):
                 raise ValueError("Invalid state")
             for override in state["overrides"].values():
-                if not isinstance(override, dict) or set(override) - {"rating", "notes"}:
+                if not isinstance(override, dict) or set(override) - {"rating", "notes", "title"}:
                     raise ValueError("Invalid track edit")
                 rating = override.get("rating")
                 if rating is not None and (type(rating) is not int or not 0 <= rating <= 5):
                     raise ValueError("Invalid rating")
                 if "notes" in override and not isinstance(override["notes"], str):
                     raise ValueError("Invalid notes")
+                if "title" in override and (not isinstance(override["title"], str) or not override["title"].strip() or len(override["title"]) > 160):
+                    raise ValueError("Invalid title")
             with LOCK:
                 (ROOT / "data").mkdir(exist_ok=True)
                 temp = ROOT / "data/state.tmp"

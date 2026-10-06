@@ -88,9 +88,11 @@ function renderDetail() {
   $('track-detail').innerHTML=`
     <div class="detail-cover" style="${palette(t)}" aria-hidden="true">${esc(t.title.slice(0,1))}</div>
     <div class="detail-eyebrow">${t.curated?'DEMO SELECTION':'OUTPUT LIBRARY'}${t.id===playingId?' · NOW PLAYING':''}</div>
-    <h2 class="detail-title">${esc(t.title)}</h2><div class="detail-meta">${t.duration?timeText(t.duration)+' · ':''}${esc(dateText(t.created))} · ${t.rating===null?'Not rated':t.rating+'/5 stars'}</div>
+    <div class="detail-title-row"><h2 class="detail-title">${esc(t.title)}</h2><button type="button" class="text-button" id="edit-track-title" aria-label="Edit track title">Edit</button></div>
+    <form id="rename-track-form" hidden><label class="field-label">Track title<input id="track-title-input" value="${esc(t.title)}" required maxlength="160"></label><div class="rename-actions"><button type="submit" class="quiet-button">Save title</button><button type="button" class="text-button" id="cancel-track-title">Cancel</button></div></form>
+    <div class="detail-meta">${t.duration?timeText(t.duration)+' · ':''}${esc(dateText(t.created))} · ${t.rating===null?'Not rated':t.rating+'/5 stars'}</div>
     <div class="detail-actions"><button class="primary-button" id="detail-play">${t.id===playingId&&!audio.paused?'Ⅱ Pause':'▶ Play'}</button><button class="quiet-button" id="use-as-draft">New draft from track</button></div>
-    <details class="transfer-box" open><summary>Send to Create</summary><div class="transfer-controls"><select id="transfer-part" aria-label="What to send to Create"><option value="settings-score">Settings + score</option><option value="settings-style">Settings + style prompt</option><option value="settings">Generation settings only</option><option value="score">ABC score only</option><option value="style">Append style prompt</option><option value="lyrics">Append lyrics</option></select><button class="quiet-button" id="send-to-create">Send →</button></div><p>Changes only the parts you choose.</p></details>
+    <details class="transfer-box" open><summary>Send to Create</summary><div class="transfer-controls"><select id="transfer-part" aria-label="What to send to Create"><option value="settings-score">Settings + score</option><option value="all">All · full composition</option><option value="settings-style">Settings + style prompt</option><option value="settings">Generation settings only</option><option value="score">ABC score only</option><option value="style">Append style prompt</option><option value="lyrics">Append lyrics</option></select><button class="quiet-button" id="send-to-create">Send →</button></div><p>Changes only the parts you choose.</p></details>
     <div class="rating-control" aria-label="Rate this track">${[1,2,3,4,5].map(n=>`<button class="${t.rating>=n?'on':''}" data-rate="${n}" aria-label="Rate ${n} star${n===1?'':'s'}">★</button>`).join('')}<button data-rate="0" class="clear">0</button><button data-rate="clear" class="clear">Clear</button></div>
     <div class="detail-playlist"><select id="add-playlist" aria-label="Choose playlist"><option value="">Add to a playlist…</option>${local.playlists.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select><button id="add-to-playlist" class="quiet-button">Add</button></div>
     <section class="detail-section"><div class="detail-section-heading"><h3>Style & production</h3><span><button class="text-button" data-send="style" aria-label="Send style prompt to Create">Send to Create →</button> <button class="text-button" data-copy="style" aria-label="Copy style prompt">Copy</button></span></div><p class="detail-copy">${esc(t.style||'No prompt saved for this track.')}</p></section>
@@ -98,6 +100,16 @@ function renderDetail() {
     <section class="detail-section"><details><summary>Score & generation settings</summary><button type="button" id="view-sheet" class="quiet-button">View sheet music ↗</button><div class="detail-section-heading"><h3>ABC score</h3><span><button class="text-button" data-send="score" aria-label="Send ABC score to Create">Send to Create →</button> <button class="text-button" data-copy="score" aria-label="Copy ABC score">Copy</button></span></div><pre>${esc(t.score||'No ABC score saved.')}</pre><div class="detail-section-heading"><h3>Generation settings</h3><span><button class="text-button" data-send="settings" aria-label="Send generation settings to Create">Send to Create →</button> <button class="text-button" data-copy="parameters" aria-label="Copy generation settings">Copy</button></span></div><pre>${esc(JSON.stringify(t.parameters,null,2))}</pre><p class="detail-copy">${esc(t.folder)}</p></details></section>
     <section class="detail-section"><h3>Listening notes</h3><textarea id="track-notes" rows="3" aria-label="Listening notes" placeholder="What works? Where could this go?">${esc(t.notes)}</textarea><button id="save-notes" class="quiet-button notes-save">Save notes</button></section>`;
   $('view-sheet').onclick=()=>{$('sheet-title').textContent=t.title+' · sheet music';$('sheet-dialog').showModal();drawScore('library-sheet',t.score);};
+  $('edit-track-title').onclick=()=>{$('rename-track-form').hidden=false;$('edit-track-title').hidden=true;$('track-title-input').focus();$('track-title-input').select();};
+  $('cancel-track-title').onclick=()=>{$('rename-track-form').hidden=true;$('edit-track-title').hidden=false;};
+  $('rename-track-form').onsubmit=async e=>{
+    e.preventDefault();const title=$('track-title-input').value.trim();
+    if(!title){toast('Enter a track title');return;}
+    const previous=local.overrides[t.id];
+    local.overrides[t.id]={...previous,title};
+    try {await saveLocal();(track(t.id)||t).title=title;renderList();renderDetail();updatePlayer();toast('Title saved');}
+    catch(error){if(previous)local.overrides[t.id]=previous;else delete local.overrides[t.id];toast(error.message);}
+  };
   $('detail-play').onclick=()=>playTrack(t.id);
   $('use-as-draft').onclick=async()=>{
     try {await preserveCurrentDraft();fillDraft(t);rememberComposition();showView('create');toast('New draft from track · your previous composition was saved');}catch(e){toast(e.message);}
@@ -196,9 +208,13 @@ function restoreComposition(snapshot) {
   draftId=snapshot.draftId||null;
   for(const [id,value]of Object.entries(snapshot.values))if($(id))$(id).value=value;
 }
-function sendTrackParts(t,part) {
+async function sendTrackParts(t,part) {
   const previous=captureComposition();
-  let changed=false;
+  let changed=false,preserved=false;
+  if(part==='all') {
+    try {preserved=await preserveCurrentDraft();previous.draftId=draftId;}catch(error){toast(error.message);return;}
+    fillDraft(t);changed=true;
+  }
   if(['settings','settings-score','settings-style'].includes(part)) {
     for(const [key,value]of Object.entries(t.parameters||{}))if(Object.hasOwn(defaults,key)&&$(key)&&value!==null){$(key).value=value;changed=true;}
   }
@@ -206,18 +222,20 @@ function sendTrackParts(t,part) {
   if((part==='style'||part==='settings-style')&&t.style){$('draft-style').value=[$('draft-style').value.trim(),t.style].filter(Boolean).join('\n\n');changed=true;}
   if(part==='lyrics'&&t.lyrics){$('draft-lyrics').value=[$('draft-lyrics').value.trim(),t.lyrics].filter(Boolean).join('\n\n');changed=true;}
   if(!changed){toast('This track has no saved '+part.replace('-',' + '));return;}
-  transferUndo={draftId,values:Object.fromEntries(Object.entries(previous.values).filter(([id,value])=>$(id).value!==value))};
-  const labels={'settings-score':'Settings and score sent','settings-style':'Settings sent and style prompt appended','settings':'Generation settings sent','score':'ABC score sent','style':'Style prompt appended','lyrics':'Lyrics appended'};
-  $('transfer-message').textContent=labels[part]+' from '+t.title;
+  transferUndo={draftId:previous.draftId,values:Object.fromEntries(Object.entries(previous.values).filter(([id,value])=>$(id).value!==value))};
+  const labels={'all':'All sent','settings-score':'Settings and score sent','settings-style':'Settings sent and style prompt appended','settings':'Generation settings sent','score':'ABC score sent','style':'Style prompt appended','lyrics':'Lyrics appended'};
+  $('transfer-message').textContent=labels[part]+' from '+t.title+(preserved?' · previous composition saved':'');
   $('transfer-status').hidden=false;rememberComposition();showView('create');if($('draft-sheet-details').open)drawScore('draft-sheet',$('draft-score').value);
-  toast(labels[part]+' · your other fields are kept');
+  toast(labels[part]+(part==='all'?(preserved?' · previous composition saved':' · full composition loaded'):' · your other fields are kept'));
 }
 async function preserveCurrentDraft() {
-  if(!['draft-title','draft-style','draft-lyrics','draft-score'].some(id=>$(id).value.trim()))return;
+  const hasText=['draft-title','draft-style','draft-lyrics','draft-score'].some(id=>$(id).value.trim());
+  const hasSettings=Object.entries(defaults).some(([key,value])=>$(key).value!==String(value));
+  if(!hasText&&!hasSettings)return false;
   const current=collectDraft();draftId=current.id;
   const index=local.drafts.findIndex(d=>d.id===current.id);
   if(index<0)local.drafts.unshift(current);else local.drafts[index]=current;
-  await saveLocal();renderDrafts();
+  await saveLocal();renderDrafts();return true;
 }
 $('undo-transfer').onclick=()=>{if(transferUndo){restoreComposition(transferUndo);transferUndo=null;$('transfer-status').hidden=true;rememberComposition();if($('draft-sheet-details').open)drawScore('draft-sheet',$('draft-score').value);toast('Transfer undone');}};
 $('close-copy').onclick=()=>$('copy-dialog').close();
@@ -318,7 +336,8 @@ $('export-request').onclick=()=>{
 document.addEventListener('keydown',e=>{if(e.code==='Space'&&!['INPUT','TEXTAREA','SELECT','BUTTON','SUMMARY'].includes(document.activeElement.tagName)&&!$('playlist-dialog').open){e.preventDefault();$('toggle-play').click();}});
 fillDraft();
 try{restoreComposition(JSON.parse(localStorage.getItem('yue2-next-composition')||'null'));}catch{}
-$('composition-form').addEventListener('input',rememberComposition);
-$('composition-form').addEventListener('change',rememberComposition);
+function compositionEdited() {$('transfer-status').hidden=true;transferUndo=null;rememberComposition();}
+$('composition-form').addEventListener('input',compositionEdited);
+$('composition-form').addEventListener('change',compositionEdited);
 (async()=>{await loadLibrary();try{const saved=JSON.parse(localStorage.getItem('yue2-next-position')||'null');if(saved&&track(saved.id)){playingId=saved.id;queue=(saved.queue||[]).filter(id=>track(id));audio.src=track(saved.id).audio;audio.addEventListener('loadedmetadata',()=>{audio.currentTime=Math.min(saved.position||0,audio.duration||0);updatePlayer();},{once:true});updatePlayer();renderList();}}catch{}})();
 setInterval(()=>loadLibrary(),30000);

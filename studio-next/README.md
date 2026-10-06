@@ -42,10 +42,19 @@ beside its style prompt, lyrics, ABC score, or generation settings. The transfer
 opens the composition view and changes only the selected part. Prompt and lyrics
 are appended so existing writing remains. The transfer menu also sends settings
 with a score or style prompt. Title and unrelated fields are kept; Undo restores
-only the fields affected by the transfer.
+only the fields affected by the transfer. The notice and its Undo action disappear
+on the next composition edit.
+
+**All · full composition** transfers the title, prompt, lyrics, score, and all
+sixteen settings. It saves the current composition first and provides Undo.
 
 **New draft from track** imports the whole composition after saving the current
 one. **Copy** is available for manual reuse, and export is under More.
+
+Typing recovers the current composition in the same browser. Saved drafts are
+written when Save draft or Create is pressed, and before a full import or
+**More → Start fresh**. Drafts remain saved after rendering; they are not
+automatically deleted. The Create form starts directly with the Title field.
 
 **Create** saves a draft and submits an explicit job to the existing engine. A
 supplied ABC score selects synthesis; without one, the engine plans a new score
@@ -74,6 +83,9 @@ score locally and works offline. Its license is in `web/abcjs_basic.LICENSE`.
 - Playback continues across browser tabs by default; preferences offer pause on leaving.
 - Reload restores the last track and position paused. Composition fields recover locally.
 - Playlists, ratings, notes, and drafts are saved in this workspace's `data/state.json`.
+- Select a track and choose **Edit** beside its title in the right panel to rename it.
+  The local display name appears in the library, player, and listening-page export;
+  original metadata and audio filenames remain unchanged.
 
 ## Validation and current limits
 

@@ -75,10 +75,11 @@ class TestGallery(unittest.TestCase):
             self.assertNotIn('/private/path', manifest)
             self.assertNotIn('private note', manifest)
             self.assertFalse(publish_gallery.build(catalog, root, output)['changed'])
-            (root / 'data/state.json').write_text(json.dumps({'overrides': {'5' * 16: {'rating': 2}, '3' * 16: {'rating': 4}}}))
+            (root / 'data/state.json').write_text(json.dumps({'overrides': {'5' * 16: {'rating': 2}, '3' * 16: {'rating': 4, 'title': 'A better name'}}}))
             updated = publish_gallery.build(catalog, root, output)
             self.assertTrue(updated['changed'])
             self.assertEqual(updated['count'], 2)
+            self.assertEqual(next(t['title'] for t in json.loads((output / 'playlist.json').read_text())['tracks'] if t['id'] == '3' * 16), 'A better name')
             archive = root / 'page.zip'
             publish_gallery.bundle(output, archive)
             with zipfile.ZipFile(archive) as zipped:

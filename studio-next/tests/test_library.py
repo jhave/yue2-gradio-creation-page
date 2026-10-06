@@ -93,7 +93,7 @@ class TestLibrary(unittest.TestCase):
     def test_edits_write_only_to_new_workspace(self):
         original = self.render("track", {"rating": 5})
         before = (original / "track.json").read_bytes()
-        state = {"overrides": {"id": {"rating": 3, "notes": "Try a softer outro"}}, "playlists": [], "drafts": []}
+        state = {"overrides": {"id": {"rating": 3, "notes": "Try a softer outro", "title": "A descriptive name"}}, "playlists": [], "drafts": []}
         body = json.dumps(state).encode()
         handler = self.handler({"Content-Type": "application/json", "Content-Length": str(len(body))}, body)
         with patch.object(server, "ROOT", self.workspace):
@@ -101,6 +101,14 @@ class TestLibrary(unittest.TestCase):
         self.assertEqual(handler.status, 200)
         self.assertEqual(json.loads((self.workspace / "data/state.json").read_text()), state)
         self.assertEqual((original / "track.json").read_bytes(), before)
+
+    def test_invalid_titles_are_rejected(self):
+        for title in ("", "   ", 42, "x" * 161):
+            body = json.dumps({"overrides": {"id": {"title": title}}, "playlists": [], "drafts": []}).encode()
+            handler = self.handler({"Content-Type": "application/json", "Content-Length": str(len(body))}, body)
+            with patch.object(server, "ROOT", self.workspace):
+                handler.do_POST()
+            self.assertEqual(handler.status, 400)
 
     def test_cross_origin_and_invalid_edit_rejected(self):
         body = json.dumps({"overrides": {"id": {"audio_path": "/bad"}}, "playlists": [], "drafts": []}).encode()
