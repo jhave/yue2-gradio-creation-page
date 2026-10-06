@@ -51,6 +51,7 @@ def run(directory):
     if not audio_path.is_file():
         raise RuntimeError("The rendered audio file could not be found on this computer")
     # Copy the new result into the prototype; never move or rewrite an original.
+    write_status(directory, state="rendering", message="Copying the new track into this library…", title=composition["title"])
     folder_name = audio_path.stem
     output = ROOT / "outputs" / folder_name
     output.mkdir(parents=True, exist_ok=False)

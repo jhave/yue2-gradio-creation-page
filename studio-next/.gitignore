@@ -2,6 +2,8 @@
 /data/
 /media/
 /outputs/
+/glia-page/
+/glia-page-upload.zip
 /preview-*.jpg
 /example-render-request.json
 __pycache__/

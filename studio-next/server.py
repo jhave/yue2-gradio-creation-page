@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 from render_bridge import build_render_call
+from render_progress import enrich
 
 ROOT = Path(__file__).resolve().parent
 LOCK = threading.RLock()
@@ -75,6 +76,7 @@ def scan_outputs(source):
 
 class Catalog:
     def __init__(self):
+        self.lock = LOCK
         self.config = {"source": str(ROOT / "outputs"), "original_studio": "http://127.0.0.1:7860",
                        **read_json(ROOT / "data/config.json")}
         self.starter = read_json(ROOT / "data/starter.json", [])
@@ -94,9 +96,13 @@ class Catalog:
                 # Catalog remains browsable if the original folder is disconnected.
                 tracks = self.starter
             self.items = {t["id"]: t for t in tracks}
-            self.items.update({t["id"]: t for t in generated})
+            for track in generated:
+                self.items.setdefault(track["id"], track)
             for track in self.starter:
-                self.items[track["id"]] = dict(track, curated=True)
+                # Keep copied audio available while reflecting current source ratings and text.
+                current = self.items.get(track["id"], track)
+                self.items[track["id"]] = dict(current, curated=True,
+                                             **({"copied_audio": track["copied_audio"]} if track.get("copied_audio") else {}))
             self.last_scan = time.monotonic()
 
     def payload(self, force=False):
@@ -122,8 +128,12 @@ def current_render():
     job_id = current.get("id", "")
     if not re.fullmatch(r"[a-f0-9]{32}", job_id):
         return {"state": "idle"}
-    state = read_json(ROOT / "data/jobs" / job_id / "status.json")
-    return {"id": job_id, **state}
+    directory = ROOT / "data/jobs" / job_id
+    state = read_json(directory / "status.json")
+    if not directory.is_dir():
+        return {"state": "idle"}
+    with LOCK:
+        return {"id": job_id, **enrich(directory, state)}
 
 
 def start_render(composition):
@@ -214,6 +224,12 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response(CATALOG.payload(force=parsed.query == "refresh=1"))
         elif parsed.path == "/api/render":
             self.json_response(current_render())
+        elif parsed.path.startswith("/listening/"):
+            relative = parsed.path.removeprefix("/listening/") or "index.html"
+            if relative not in {"index.html", "listening.css", "listening.js", "playlist.json", "playlist.js"} and not re.fullmatch(r"audio/[a-f0-9]{16}\.(mp3|flac|wav|ogg|m4a)", relative):
+                self.json_response({"error": "Not found"}, 404)
+                return
+            self.file_response(ROOT / "glia-page" / relative, audio=relative.startswith("audio/"), head=head)
         elif parsed.path.startswith("/audio/"):
             CATALOG.refresh()
             item = CATALOG.items.get(parsed.path.removeprefix("/audio/"))
@@ -223,7 +239,7 @@ class Handler(BaseHTTPRequestHandler):
             path = ROOT / item["copied_audio"] if item.get("copied_audio") else Path(item["audio_path"])
             self.file_response(path, audio=True, head=head)
         else:
-            allowed = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
+            allowed = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/abcjs-basic-min.js": "abcjs-basic-min.js"}
             if parsed.path not in allowed:
                 self.json_response({"error": "Not found"}, 404)
                 return
@@ -273,8 +289,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    from publish_gallery import start_watcher
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=7861)
     args = parser.parse_args()
+    start_watcher(CATALOG, ROOT, ROOT / "glia-page")
     print(f"YuE2 Studio Next: http://127.0.0.1:{args.port} (original studio unchanged)", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()

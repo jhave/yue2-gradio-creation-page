@@ -23,6 +23,11 @@ See its README to connect an existing library and renderer. Personal music and
 workspace data are excluded from Git. Full model rendering through Studio Next
 still needs an end-to-end test before switching the demo workflow.
 
+Studio Next also provides elapsed render time, expandable stage feedback, and
+engraved sheet music. Its [independent listening-page exporter](studio-next/PUBLISHING.md)
+keeps a local static page of every current four- and five-star song up to date,
+and prepares a standalone upload ZIP for glia.ca.
+
 ## The files
 
 | | |

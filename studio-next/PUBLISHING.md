@@ -1,22 +1,60 @@
 # Independent listening page for glia.ca
 
-The next publishing step is a standalone page of selected top songs, hosted on
-glia.ca. It should contain a track list, one persistent player, song details and
-lyrics where appropriate, and direct links to the model and this interface:
+Studio Next creates `glia-page/`, a complete static listening page containing
+every available song currently rated four or five stars. Ratings come from the
+live original library, with Studio Next's local rating edits applied. The demo
+snapshot no longer freezes an original track's current metadata.
 
-- YuE model source: https://github.com/multimodal-art-projection/YuE
-- Gradio GUI and Studio Next: https://github.com/jhave/yue2-gradio-creation-page
+The page has a track list, search, sort, lyrics, optional sound descriptions,
+and a persistent player. Inspecting another track does not change playback.
+It links to [YuE source](https://github.com/multimodal-art-projection/YuE) and
+[the Studio / Gradio GUI](https://github.com/jhave/yue2-gradio-creation-page).
+There are no creation controls or renderer connections on the public page.
 
-This public page should have no composition or generation controls and no
-connection to the local renderer. Audio and selected metadata can be exported as
-a static bundle, so hosting does not require Python, Gradio, or model weights.
-The existing `publish.py` export is a useful starting point; adapt its selected
-track manifest to a listening-only version of Studio Next's shared player.
+## Local updates
 
-Choose the songs and public metadata before exporting. Include MP3s and display
-information, with optional public lyrics and prompts. Exclude local filesystem
-paths, drafts, private notes, job logs, request archives, and latent tensors.
+The Studio Next server checks for updates every 30 seconds, including new
+tracks, rating promotions or demotions, and public text edits. It rebuilds the
+local page when those inputs change. Starting Studio Next again also updates
+the page. Completed but unrated songs stay out until given four or five stars.
 
-This commit records the publishing direction. It does not upload songs or deploy
-a glia.ca page. The original local studio and the private copied demo library
-remain available for evaluation.
+Preview at http://127.0.0.1:7861/listening/ or open `glia-page/index.html` directly.
+When served over HTTP, an open listening page refreshes its catalog every
+30 seconds without restarting its player. A page opened directly from disk
+needs a browser refresh to read updated files.
+
+For an independent local watcher without the Studio Next web server:
+
+```sh
+python3 publish_gallery.py --watch
+```
+
+## Prepare an upload
+
+Double-click **Prepare glia upload.command**, or run:
+
+```sh
+python3 publish_gallery.py --zip
+```
+
+This first rebuilds from current ratings, then creates `glia-page-upload.zip`.
+Extract it and upload its contents to any folder on glia.ca. It has relative
+asset links and needs no Python, Gradio, or model files on the host. The ZIP
+contains only the currently selected songs. A previously made ZIP is a snapshot;
+prepare a fresh one after changing the collection.
+
+Local updates do not deploy changes to glia.ca. Refresh the hosted page by
+uploading a newly prepared bundle. Deployment has not been configured here.
+
+## Export scope
+
+The page includes playable audio, titles, ratings, dates, duration, lyrics, and
+style prompts. Check those public text fields before uploading. It excludes
+local filesystem paths, private listening notes, drafts, generation requests,
+logs, parameter archives, and latent tensors. Audio is copied, never moved or
+modified. Source files and original ratings remain unchanged.
+
+The local output folder retains older generated audio copies to avoid deleting
+files automatically. Demoted songs disappear from the manifest and from fresh
+upload ZIPs; retained unlisted files are not bundled. Upload the fresh ZIP
+contents rather than the entire accumulated local folder.

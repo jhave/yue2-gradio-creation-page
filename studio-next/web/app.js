@@ -95,8 +95,9 @@ function renderDetail() {
     <div class="detail-playlist"><select id="add-playlist" aria-label="Choose playlist"><option value="">Add to a playlist…</option>${local.playlists.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select><button id="add-to-playlist" class="quiet-button">Add</button></div>
     <section class="detail-section"><div class="detail-section-heading"><h3>Style & production</h3><span><button class="text-button" data-send="style" aria-label="Send style prompt to Create">Send to Create →</button> <button class="text-button" data-copy="style" aria-label="Copy style prompt">Copy</button></span></div><p class="detail-copy">${esc(t.style||'No prompt saved for this track.')}</p></section>
     <section class="detail-section"><div class="detail-section-heading"><h3>Lyrics</h3><span><button class="text-button" data-send="lyrics" aria-label="Send lyrics to Create">Send to Create →</button> <button class="text-button" data-copy="lyrics" aria-label="Copy lyrics">Copy</button></span></div><p class="detail-copy lyric-copy">${esc(t.lyrics||'Instrumental · no lyrics supplied')}</p></section>
-    <section class="detail-section"><details><summary>Score & generation settings</summary><div class="detail-section-heading"><h3>ABC score</h3><span><button class="text-button" data-send="score" aria-label="Send ABC score to Create">Send to Create →</button> <button class="text-button" data-copy="score" aria-label="Copy ABC score">Copy</button></span></div><pre>${esc(t.score||'No ABC score saved.')}</pre><div class="detail-section-heading"><h3>Generation settings</h3><span><button class="text-button" data-send="settings" aria-label="Send generation settings to Create">Send to Create →</button> <button class="text-button" data-copy="parameters" aria-label="Copy generation settings">Copy</button></span></div><pre>${esc(JSON.stringify(t.parameters,null,2))}</pre><p class="detail-copy">${esc(t.folder)}</p></details></section>
+    <section class="detail-section"><details><summary>Score & generation settings</summary><button type="button" id="view-sheet" class="quiet-button">View sheet music ↗</button><div class="detail-section-heading"><h3>ABC score</h3><span><button class="text-button" data-send="score" aria-label="Send ABC score to Create">Send to Create →</button> <button class="text-button" data-copy="score" aria-label="Copy ABC score">Copy</button></span></div><pre>${esc(t.score||'No ABC score saved.')}</pre><div class="detail-section-heading"><h3>Generation settings</h3><span><button class="text-button" data-send="settings" aria-label="Send generation settings to Create">Send to Create →</button> <button class="text-button" data-copy="parameters" aria-label="Copy generation settings">Copy</button></span></div><pre>${esc(JSON.stringify(t.parameters,null,2))}</pre><p class="detail-copy">${esc(t.folder)}</p></details></section>
     <section class="detail-section"><h3>Listening notes</h3><textarea id="track-notes" rows="3" aria-label="Listening notes" placeholder="What works? Where could this go?">${esc(t.notes)}</textarea><button id="save-notes" class="quiet-button notes-save">Save notes</button></section>`;
+  $('view-sheet').onclick=()=>{$('sheet-title').textContent=t.title+' · sheet music';$('sheet-dialog').showModal();drawScore('library-sheet',t.score);};
   $('detail-play').onclick=()=>playTrack(t.id);
   $('use-as-draft').onclick=async()=>{
     try {await preserveCurrentDraft();fillDraft(t);rememberComposition();showView('create');toast('New draft from track · your previous composition was saved');}catch(e){toast(e.message);}
@@ -208,7 +209,7 @@ function sendTrackParts(t,part) {
   transferUndo={draftId,values:Object.fromEntries(Object.entries(previous.values).filter(([id,value])=>$(id).value!==value))};
   const labels={'settings-score':'Settings and score sent','settings-style':'Settings sent and style prompt appended','settings':'Generation settings sent','score':'ABC score sent','style':'Style prompt appended','lyrics':'Lyrics appended'};
   $('transfer-message').textContent=labels[part]+' from '+t.title;
-  $('transfer-status').hidden=false;rememberComposition();showView('create');
+  $('transfer-status').hidden=false;rememberComposition();showView('create');if($('draft-sheet-details').open)drawScore('draft-sheet',$('draft-score').value);
   toast(labels[part]+' · your other fields are kept');
 }
 async function preserveCurrentDraft() {
@@ -218,13 +219,13 @@ async function preserveCurrentDraft() {
   if(index<0)local.drafts.unshift(current);else local.drafts[index]=current;
   await saveLocal();renderDrafts();
 }
-$('undo-transfer').onclick=()=>{if(transferUndo){restoreComposition(transferUndo);transferUndo=null;$('transfer-status').hidden=true;rememberComposition();toast('Transfer undone');}};
+$('undo-transfer').onclick=()=>{if(transferUndo){restoreComposition(transferUndo);transferUndo=null;$('transfer-status').hidden=true;rememberComposition();if($('draft-sheet-details').open)drawScore('draft-sheet',$('draft-score').value);toast('Transfer undone');}};
 $('close-copy').onclick=()=>$('copy-dialog').close();
 function fillDraft(t=null) {
   draftId=t?.draftId||null;
   $('draft-title').value=t?.title||'';$('draft-style').value=t?.style||'';$('draft-lyrics').value=t?.lyrics||'';$('draft-score').value=t?.score||'';
   for(const [key,value]of Object.entries({...defaults,...t?.parameters}))if($(key))$(key).value=value;
-  $('draft-status').textContent='';$('transfer-status').hidden=true;transferUndo=null;
+  $('draft-status').textContent='';$('transfer-status').hidden=true;transferUndo=null;if($('draft-sheet-details').open)drawScore('draft-sheet',$('draft-score').value);
 }
 function collectDraft() {
   const parameters={};for(const key of Object.keys(defaults))parameters[key]=key==='cot_mode'?$(key).value:Number($(key).value);
@@ -238,13 +239,44 @@ function renderDrafts() {
 $('draft-list').onclick=e=>{const b=e.target.closest('[data-draft]');if(b){const d=local.drafts.find(d=>d.id===b.dataset.draft);fillDraft({...d,draftId:d.id});rememberComposition();showView('create');}};
 $('new-draft').onclick=async()=>{try{await preserveCurrentDraft();fillDraft();rememberComposition();showView('create');}catch(e){toast(e.message);}};
 $('composition-form').onsubmit=async e=>{e.preventDefault();try{const draft=collectDraft();draftId=draft.id;const index=local.drafts.findIndex(d=>d.id===draft.id);if(index<0)local.drafts.unshift(draft);else local.drafts[index]=draft;await saveLocal();rememberComposition();renderDrafts();$('draft-status').textContent='Draft saved · '+draft.title;toast('Draft saved');}catch(error){toast(error.message);}};
+function minutesText(seconds) {return Math.max(0,Number(seconds)/60).toFixed(1)+' min';}
+function drawScore(id,score) {
+  const paper=$(id);paper.replaceChildren();
+  if(!score?.trim()){paper.textContent='No score yet. Paste ABC or inspect a completed track.';return;}
+  if(!window.ABCJS){paper.textContent='The notation renderer is unavailable. ABC text is still editable.';return;}
+  try {window.ABCJS.renderAbc(id,score,{responsive:'resize',staffwidth:800,add_classes:true});if(!paper.querySelector('svg'))paper.textContent='No readable musical notation found in this ABC.';}
+  catch {paper.textContent='This score could not be drawn. You can still inspect and edit its ABC text.';}
+}
+let scorePreviewTimer;
+$('close-sheet').onclick=()=>$('sheet-dialog').close();
+$('draft-sheet-details').addEventListener('toggle',()=>{if($('draft-sheet-details').open)drawScore('draft-sheet',$('draft-score').value);});
+$('draft-score').addEventListener('input',()=>{clearTimeout(scorePreviewTimer);scorePreviewTimer=setTimeout(()=>{if($('draft-sheet-details').open)drawScore('draft-sheet',$('draft-score').value);},500);});
+function updateRenderClock() {
+  if(!renderJob||renderJob.state==='idle')return;
+  const active=['connecting','rendering'].includes(renderJob.state);
+  const elapsed=active&&renderJob.started_at?Date.now()/1000-renderJob.started_at:renderJob.elapsed_seconds||0;
+  let text=(active?'Elapsed ':'Finished in ')+minutesText(elapsed);
+  const prediction=renderJob.estimated_total;
+  if(active&&prediction) {
+    if(elapsed>prediction.high)text+=' · longer than previous comparable renders';
+    else text+=' · roughly '+minutesText(Math.max(0,prediction.low-elapsed))+'–'+minutesText(Math.max(0,prediction.high-elapsed))+' remaining (estimated '+minutesText(prediction.low)+'–'+minutesText(prediction.high)+' total)';
+  }else if(active)text+=' · learning finish estimates ('+(renderJob.estimate_samples||0)+'/3 comparable renders)';
+  $('render-timing').textContent=text;
+}
 function displayRender(job) {
   renderJob=job;
   const active=['connecting','rendering'].includes(job.state);
   $('create-track').disabled=active;
   $('create-track').textContent=active?'Creating…':'Create';
   $('render-status').hidden=job.state==='idle';
+  $('render-title').textContent=job.title||'Current render';
   $('render-message').textContent=job.message||'';
+  updateRenderClock();
+  const stages=job.stages||[];
+  const completed=stages.filter(s=>s.status==='done'||s.status==='skipped').length;
+  $('render-summary').textContent=completed+' of '+stages.length+' stages complete · details';
+  $('render-stages').innerHTML=stages.map(s=>`<li class="stage-${s.status}"><span>${s.status==='done'?'✓':s.status==='skipped'?'—':s.status==='active'?'◉':s.status==='error'?'!':'○'}</span> ${esc(s.label)} <small>${esc(s.status)}</small></li>`).join('');
+  $('render-engine-note').textContent='Configured flow steps: '+(job.configured_flow_steps??'—')+'. Engine progress is approximate; stage completion does not predict time remaining.';
   $('render-progress').hidden=!active;
   if(typeof job.progress==='number')$('render-progress').value=job.progress;else $('render-progress').removeAttribute('value');
   $('play-render').hidden=job.state!=='complete';
@@ -272,7 +304,7 @@ $('create-track').onclick=async()=>{
   }catch(error){toast(error.message);}finally{if(!['connecting','rendering'].includes(renderJob?.state))button.disabled=false;}
 };
 $('play-render').onclick=async()=>{await loadLibrary(true);if(track(renderJob?.track_id)){collection='all';$('search').value='';renderCollections();showView('library');await playTrack(renderJob.track_id);}else toast('Refresh the library to find the new track');};
-pollRender();setInterval(pollRender,2500);
+pollRender();setInterval(pollRender,2500);setInterval(updateRenderClock,1000);
 $('export-request').onclick=()=>{
   if(!$('composition-form').reportValidity())return;
   try {

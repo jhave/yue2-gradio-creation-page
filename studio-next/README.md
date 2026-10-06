@@ -53,11 +53,23 @@ and then synthesizes. The engine writes a new render to its output directory,
 and Studio Next copies the result into its own `outputs/`. It never replaces an
 existing track. Listening continues; **Play new track** selects the result.
 
+Render feedback shows total elapsed minutes and an expandable list of completed,
+active, and remaining stages. Finish estimates use a range from at least three
+comparable completed jobs with the same flow setting and planning mode; until
+then the display says it is learning estimates. The engine's nonlinear progress
+bar and heartbeat-derived flow count are not treated as an accurate time forecast.
+
+The composer also has a **Sheet music** disclosure beneath ABC notation. Saved
+tracks offer **View sheet music** in their score/settings section. The bundled
+[abcjs 6.4.4](https://docs.abcjs.net/visual/render-abc-options.html) engraves the
+score locally and works offline. Its license is in `web/abcjs_basic.LICENSE`.
+
 ## Library and playback
 
 - New outputs appear on refresh, every 30 seconds, and when returning to the tab.
 - All renders, favorites, and New & unrated separate ratings from unreviewed work.
 - Demo selection uses an optional local `data/starter.json` and `media/` snapshot.
+- Demo audio remains copied locally, while available source tracks supply current ratings and text.
 - One player keeps its track and position across Library, Create, and Saved drafts.
 - Playback continues across browser tabs by default; preferences offer pause on leaving.
 - Reload restores the last track and position paused. Composition fields recover locally.
@@ -72,9 +84,11 @@ node --check web/app.js
 
 Checks cover new render discovery, copied-library fallback, isolated edits,
 request validation, audio seeking, empty-checkout behavior, endpoint selection,
-and copying a mocked completed result. Browser checks cover selective transfers
-and preserving the current composition. Full model generation has not yet been
-tested through this interface.
+and copying a mocked completed result. Additional checks verify honest timing,
+history-based estimates, current favorites export, and privacy of the manifest.
+Browser checks cover selective transfers, preserving the current composition,
+engraved scores, and standalone audio playback. A real model render is being
+evaluated; completed end-to-end generation is not yet verified.
 
 Use one render at a time across both interfaces. The existing Gradio studio's
 Stop control handles cancellation. Multiple simultaneous editing sessions,
@@ -84,7 +98,10 @@ musical staves, and latent re-solving are not implemented here yet.
 
 `server.py` serves the catalog and local UI; `render_bridge.py` validates and maps
 composition settings; `render_worker.py` calls the existing engine. `web/` has no
-frontend dependencies. `api-schema.json` is a portable baseline contract; local
+package installation requirements; its notation library is bundled.
+`render_progress.py` tracks observed stages. `publish_gallery.py` builds and
+updates the independent listening page from templates in `listening/`.
+`api-schema.json` is a portable baseline contract; local
 setup captures the running engine's current schema in ignored `data/`.
 
 Machine paths, music, scores, personal prompts, render logs, drafts, and workspace
@@ -92,4 +109,4 @@ state stay in ignored `data/`, `media/`, and `outputs/`. The repository's origin
 `app.py` and assets remain the original studio. The running demo installation
 does not change when this separate checkout is committed or pushed.
 
-See [PUBLISHING.md](PUBLISHING.md) for the planned independent glia.ca listening page.
+See [PUBLISHING.md](PUBLISHING.md) for local updates and the glia.ca upload bundle.
